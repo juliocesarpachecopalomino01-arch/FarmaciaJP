@@ -1,0 +1,23 @@
+.customer-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.customer-sales-container {
+  max-height: 500px;
+  overflow-y: auto;
+  margin: 1rem 0;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--primary);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.btn-link:hover {
+  color: var(--primary-dark);
+}

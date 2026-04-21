@@ -1,0 +1,77 @@
+.return-info {
+  background: var(--background);
+  padding: 1rem;
+  border-radius: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.return-info h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--text);
+}
+
+.return-info p {
+  margin: 0.25rem 0;
+  color: var(--text-light);
+  font-size: 0.9rem;
+}
+
+.return-items-section {
+  margin: 1.5rem 0;
+}
+
+.return-items-section h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: var(--text);
+}
+
+.return-items-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.return-items-table thead {
+  background: var(--background);
+}
+
+.return-items-table th {
+  padding: 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+
+.return-items-table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.return-items-table input {
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.return-total {
+  text-align: right;
+  font-size: 1.25rem;
+  color: var(--primary);
+  margin: 1.5rem 0;
+  padding: 1rem;
+  background: var(--background);
+  border-radius: 0.5rem;
+}
+
+.sale-selection {
+  padding: 2rem 0;
+}

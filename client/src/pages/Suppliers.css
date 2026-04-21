@@ -1,0 +1,10 @@
+.supplier-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.supplier-tax {
+  font-size: 0.85rem;
+  color: var(--text-light);
+  margin-top: 0.25rem;
+}

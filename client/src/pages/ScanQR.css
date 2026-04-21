@@ -1,0 +1,259 @@
+.scan-container {
+  max-width: 800px;
+  margin: 2rem auto;
+}
+
+.scan-input-section {
+  background: var(--card-bg);
+  border-radius: 12px;
+  padding: 2rem;
+  margin-bottom: 2rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.scan-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.scan-icon {
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+.scan-input {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  font-size: 1rem;
+  transition: all 0.2s;
+}
+
+.scan-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.1);
+}
+
+.scan-button {
+  padding: 0.75rem 2rem;
+  white-space: nowrap;
+}
+
+.error-message {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--error);
+  font-size: 0.9rem;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: rgba(var(--error-rgb), 0.1);
+  border-radius: 8px;
+}
+
+.product-info-card {
+  background: var(--card-bg);
+  border-radius: 12px;
+  padding: 2rem;
+  box-shadow: var(--shadow-sm);
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.product-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 2px solid var(--border);
+}
+
+.product-title-section h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.75rem;
+  color: var(--text-primary);
+}
+
+.product-barcode {
+  margin: 0;
+  color: var(--text-light);
+  font-size: 0.9rem;
+  font-family: monospace;
+}
+
+.product-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.product-status-badge.active {
+  background: rgba(var(--success-rgb), 0.1);
+  color: var(--success);
+}
+
+.product-status-badge.inactive {
+  background: rgba(var(--error-rgb), 0.1);
+  color: var(--error);
+}
+
+.product-section {
+  margin-bottom: 1.5rem;
+}
+
+.product-description {
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.product-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.detail-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-light);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.detail-value {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.detail-value.price-value {
+  color: var(--primary);
+  font-size: 1.25rem;
+}
+
+.detail-value.cost-price {
+  color: var(--success);
+}
+
+.detail-value.stock-low {
+  color: var(--error);
+}
+
+.detail-value.stock-normal {
+  color: var(--success);
+}
+
+.stock-warning {
+  font-size: 0.9rem;
+  color: var(--error);
+  font-weight: normal;
+}
+
+.detail-value.expired {
+  color: var(--error);
+}
+
+.detail-value.expiring {
+  color: var(--warning);
+}
+
+.expiration-status {
+  font-size: 0.9rem;
+  font-weight: normal;
+}
+
+.expiration-status.expired {
+  color: var(--error);
+}
+
+.expiration-status.expiring {
+  color: var(--warning);
+}
+
+.expiration-status.ok {
+  color: var(--success);
+}
+
+.prescription-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.prescription-badge.prescription-yes {
+  background: rgba(var(--error-rgb), 0.1);
+  color: var(--error);
+}
+
+.prescription-badge.prescription-no {
+  background: rgba(var(--success-rgb), 0.1);
+  color: var(--success);
+}
+
+.product-footer {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.product-meta {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-light);
+  text-align: center;
+}
+
+@media (max-width: 768px) {
+  .scan-input-wrapper {
+    flex-direction: column;
+  }
+
+  .scan-input {
+    width: 100%;
+  }
+
+  .scan-button {
+    width: 100%;
+  }
+
+  .product-header {
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .product-details-grid {
+    grid-template-columns: 1fr;
+  }
+}

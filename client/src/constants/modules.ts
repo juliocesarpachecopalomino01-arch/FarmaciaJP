@@ -1,0 +1,17 @@
+export const MODULES = [
+  { key: 'dashboard', label: 'Dashboard', path: '/' },
+  { key: 'products', label: 'Productos', path: '/products' },
+  { key: 'categories', label: 'Categorías', path: '/categories' },
+  { key: 'inventory', label: 'Inventario', path: '/inventory' },
+  { key: 'sales', label: 'Ventas', path: '/sales' },
+  { key: 'cash-register', label: 'Caja', path: '/cash-register' },
+  { key: 'cash-movements', label: 'Movimientos de Caja', path: '/cash-movements' },
+  { key: 'alerts', label: 'Alertas', path: '/alerts' },
+  { key: 'customers', label: 'Clientes', path: '/customers' },
+  { key: 'reports', label: 'Reportes', path: '/reports' },
+  { key: 'returns', label: 'Devoluciones', path: '/returns' },
+  { key: 'suppliers', label: 'Proveedores', path: '/suppliers' },
+  { key: 'purchases', label: 'Compras', path: '/purchases' },
+  { key: 'scan-qr', label: 'Escanear QR', path: '/scan-qr' },
+  { key: 'users', label: 'Usuarios', path: '/users' },
+] as const;

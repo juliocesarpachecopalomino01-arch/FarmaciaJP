@@ -1,0 +1,145 @@
+.notification-button {
+  position: relative;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.notification-button:hover {
+  color: var(--primary);
+}
+
+.notification-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: var(--danger);
+  color: white;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notification-center {
+  position: absolute;
+  top: 60px;
+  right: 1rem;
+  width: 350px;
+  background: var(--surface);
+  border-radius: 0.5rem;
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  max-height: 500px;
+  display: flex;
+  flex-direction: column;
+}
+
+.notification-header {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.notification-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.close-notifications {
+  background: none;
+  border: none;
+  color: var(--text-light);
+  cursor: pointer;
+  padding: 0.25rem;
+}
+
+.notification-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.notification-item {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.notification-item:hover {
+  background: var(--background);
+}
+
+.notification-item.read {
+  opacity: 0.6;
+}
+
+.notification-item.warning {
+  border-left: 3px solid var(--warning);
+}
+
+.notification-item.error {
+  border-left: 3px solid var(--danger);
+}
+
+.notification-item.info {
+  border-left: 3px solid var(--primary);
+}
+
+.notification-icon {
+  flex-shrink: 0;
+}
+
+.notification-item.warning .notification-icon {
+  color: var(--warning);
+}
+
+.notification-item.error .notification-icon {
+  color: var(--danger);
+}
+
+.notification-item.info .notification-icon {
+  color: var(--primary);
+}
+
+.notification-content {
+  flex: 1;
+}
+
+.notification-title {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.25rem;
+}
+
+.notification-message {
+  font-size: 0.9rem;
+  color: var(--text-light);
+  margin-bottom: 0.25rem;
+}
+
+.notification-time {
+  font-size: 0.75rem;
+  color: var(--text-light);
+}
+
+.no-notifications {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-light);
+}
