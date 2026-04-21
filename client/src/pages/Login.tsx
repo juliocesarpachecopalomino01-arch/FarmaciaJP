@@ -20,7 +20,9 @@ export default function Login() {
       await login(username, password);
       navigate('/');
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Error al iniciar sesión');
+      const serverMsg = err?.response?.data?.error;
+      const fallbackMsg = err?.message || 'Error al iniciar sesión';
+      setError(typeof serverMsg === 'string' ? serverMsg : fallbackMsg);
     } finally {
       setLoading(false);
     }

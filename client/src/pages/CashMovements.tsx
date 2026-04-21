@@ -7,6 +7,7 @@ import { useAuth } from '../hooks/useAuth';
 import { salesApi, Sale } from '../api/sales';
 import { usersApi } from '../api/users';
 import { cashRegistersApi } from '../api/cashRegisters';
+import { buildApiUrl } from '../api/client';
 import './Sales.css';
 import './CashMovements.css';
 
@@ -241,7 +242,7 @@ export default function CashMovements() {
                         onClick={async () => {
                           try {
                             const token = localStorage.getItem('token');
-                            const response = await fetch(`/api/receipts/${sale.id}/pdf`, {
+                            const response = await fetch(buildApiUrl(`/receipts/${sale.id}/pdf`), {
                               headers: { 'Authorization': `Bearer ${token}` },
                             });
                             if (response.ok) {

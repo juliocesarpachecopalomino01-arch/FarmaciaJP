@@ -1,4 +1,4 @@
-import api from './client';
+import api, { buildApiUrl } from './client';
 
 export interface Product {
   id: number;
@@ -68,7 +68,7 @@ export const productsApi = {
 
   downloadImportTemplate: async (): Promise<void> => {
     const token = localStorage.getItem('token');
-    const response = await fetch('/api/products/import/template', {
+    const response = await fetch(buildApiUrl('/products/import/template'), {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!response.ok) throw new Error('Error al descargar la plantilla');

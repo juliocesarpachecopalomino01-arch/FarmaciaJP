@@ -6,6 +6,7 @@ import { productsApi } from '../api/products';
 import { customersApi } from '../api/customers';
 import { draftSalesApi } from '../api/draftSales';
 import { cashRegistersApi, CashRegister } from '../api/cashRegisters';
+import { buildApiUrl } from '../api/client';
 import { X, ShoppingCart, Trash2, FileText, RotateCcw } from 'lucide-react';
 import { format } from 'date-fns';
 import './Sales.css';
@@ -41,7 +42,7 @@ export default function Sales() {
       setTimeout(async () => {
         try {
           const token = localStorage.getItem('token');
-          const response = await fetch(`/api/receipts/${data.id}/pdf`, {
+          const response = await fetch(buildApiUrl(`/receipts/${data.id}/pdf`), {
             headers: { 'Authorization': `Bearer ${token}` },
           });
           if (response.ok) {

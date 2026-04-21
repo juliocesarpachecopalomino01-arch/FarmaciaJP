@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from 'react-query';
+import { buildApiUrl } from '../api/client';
 import { reportsApi } from '../api/reports';
 import { format, subDays } from 'date-fns';
 import { BarChart3, TrendingUp, Package, Users, Download } from 'lucide-react';
@@ -67,7 +68,7 @@ export default function Reports() {
                     return;
                   }
 
-                  const url = `/api/export/sales/excel?start_date=${dateRange.start_date}&end_date=${dateRange.end_date}`;
+                  const url = buildApiUrl(`/export/sales/excel?start_date=${dateRange.start_date}&end_date=${dateRange.end_date}`);
                   const response = await fetch(url, {
                     headers: {
                       'Authorization': `Bearer ${token}`,
@@ -106,7 +107,7 @@ export default function Reports() {
                     return;
                   }
 
-                  const response = await fetch('/api/export/products/excel', {
+                  const response = await fetch(buildApiUrl('/export/products/excel'), {
                     headers: {
                       'Authorization': `Bearer ${token}`,
                     },
@@ -144,7 +145,7 @@ export default function Reports() {
                     return;
                   }
 
-                  const response = await fetch('/api/export/inventory/excel', {
+                  const response = await fetch(buildApiUrl('/export/inventory/excel'), {
                     headers: {
                       'Authorization': `Bearer ${token}`,
                     },
