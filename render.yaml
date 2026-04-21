@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: farmaciajp-backend
+    env: node
+    rootDir: server
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        sync: false
+      - key: AUDIT_PASSWORD
+        sync: false
