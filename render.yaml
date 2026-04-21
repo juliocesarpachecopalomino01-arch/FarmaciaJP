@@ -7,9 +7,15 @@ services:
     startCommand: npm start
     plan: starter
     autoDeploy: true
+    disk:
+      name: farmaciajp-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
+      - key: DB_PATH
+        value: /var/data/farmacia.db
       - key: JWT_SECRET
         sync: false
       - key: AUDIT_PASSWORD

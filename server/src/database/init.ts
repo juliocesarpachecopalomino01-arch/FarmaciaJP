@@ -6,7 +6,10 @@ import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../../database/farmacia.db');
+const defaultDbPath = process.env.RENDER
+  ? '/var/data/farmacia.db'
+  : path.join(__dirname, '../../database/farmacia.db');
+const DB_PATH = process.env.DB_PATH || defaultDbPath;
 const DB_DIR = path.dirname(DB_PATH);
 
 // Ensure directory exists before opening sqlite file
@@ -19,6 +22,7 @@ export const db = new sqlite3.Database(DB_PATH, (err) => {
     console.error('Error opening database:', err);
   } else {
     console.log('✅ Connected to SQLite database');
+    console.log(`📁 SQLite path: ${DB_PATH}`);
   }
 });
 
