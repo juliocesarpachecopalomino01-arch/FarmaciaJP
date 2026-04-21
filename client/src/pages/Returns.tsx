@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { useSearchParams } from 'react-router-dom';
-import { returnsApi, Return, CreateReturnRequest } from '../api/returns';
+import { returnsApi, CreateReturnRequest } from '../api/returns';
 import { salesApi } from '../api/sales';
-import { Plus, RotateCcw, Search } from 'lucide-react';
+import { Plus, RotateCcw } from 'lucide-react';
 import { format } from 'date-fns';
 import './Returns.css';
 

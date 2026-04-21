@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { inventoryApi, InventoryItem, InventoryMovement } from '../api/inventory';
+import { inventoryApi, InventoryItem } from '../api/inventory';
 import { productsApi } from '../api/products';
-import { Plus, Package, TrendingUp, TrendingDown, Edit, Upload, Download } from 'lucide-react';
+import { Plus, Package, Edit, Upload, Download } from 'lucide-react';
 import './Inventory.css';
 
 export default function Inventory() {

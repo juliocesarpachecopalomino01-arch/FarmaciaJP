@@ -45,6 +45,7 @@ export interface CreatePurchaseRequest {
   discount?: number;
   tax_amount?: number;
   notes?: string;
+  afecta_caja?: boolean;
 }
 
 export interface PurchasesResponse {

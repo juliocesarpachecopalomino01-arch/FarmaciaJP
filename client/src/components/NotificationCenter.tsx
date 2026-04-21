@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from 'react-query';
 import api from '../api/client';
-import { Bell, X, AlertTriangle, Clock, Package } from 'lucide-react';
+import { Bell, X, AlertTriangle, Package } from 'lucide-react';
 import './NotificationCenter.css';
 
 interface Notification {

@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useQuery } from 'react-query';
 import { productsApi } from '../api/products';
 import { customersApi } from '../api/customers';
-import { salesApi } from '../api/sales';
 import { Search, X } from 'lucide-react';
 import './GlobalSearch.css';
 
@@ -23,12 +22,6 @@ export default function GlobalSearch({ isOpen, onClose }: GlobalSearchProps) {
   const { data: customers } = useQuery(
     ['search-customers', searchTerm],
     () => customersApi.getAll({ search: searchTerm, limit: 5 }),
-    { enabled: searchTerm.length >= 2 }
-  );
-
-  const { data: sales } = useQuery(
-    ['search-sales', searchTerm],
-    () => salesApi.getAll({ limit: 5 }),
     { enabled: searchTerm.length >= 2 }
   );
 

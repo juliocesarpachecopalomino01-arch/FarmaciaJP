@@ -9,7 +9,7 @@ export default function ScanQR() {
   const [scannedProduct, setScannedProduct] = useState<Product | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: product, isLoading, refetch } = useQuery(
+  const { isLoading, refetch } = useQuery(
     ['product-by-qr', qrCode],
     () => productsApi.getByQRCode(qrCode),
     {
@@ -224,12 +224,7 @@ export default function ScanQR() {
             </div>
 
             <div className="product-footer">
-              <p className="product-meta">
-                Creado: {new Date(scannedProduct.created_at || '').toLocaleDateString('es-ES')}
-                {scannedProduct.updated_at && (
-                  <> · Actualizado: {new Date(scannedProduct.updated_at).toLocaleDateString('es-ES')}</>
-                )}
-              </p>
+              <p className="product-meta">Información actualizada del producto por QR</p>
             </div>
           </div>
         )}
