@@ -57,10 +57,10 @@ router.get('/stats', authenticateToken, [
           const returnsList = returns || [];
           
           const totalSales = salesList.length;
-          const totalRevenue = salesList.reduce((sum: number, sale: any) => sum + (sale.final_amount || 0), 0);
+          const totalRevenue = salesList.reduce((sum: number, sale: any) => sum + Number(sale.final_amount || 0), 0);
           const totalReturns = returnsList.length;
-          const totalReturnedAmount = returnsList.reduce((sum: number, ret: any) => sum + (ret.total_amount || 0), 0);
-          const netRevenue = totalRevenue - totalReturnedAmount;
+          const totalReturnedAmount = returnsList.reduce((sum: number, ret: any) => sum + Number(ret.total_amount || 0), 0);
+          const netRevenue = Number(totalRevenue) - Number(totalReturnedAmount);
 
           // Count sales by status
           const salesByStatus = {

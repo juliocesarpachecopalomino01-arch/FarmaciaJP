@@ -81,7 +81,7 @@ router.get('/:id', (req, res) => {
         if (err) {
           return res.status(500).json({ error: 'Database error' });
         }
-        res.json({ ...customer, stats });
+        res.json({ ...(customer as Record<string, unknown>), stats });
       }
     );
   });

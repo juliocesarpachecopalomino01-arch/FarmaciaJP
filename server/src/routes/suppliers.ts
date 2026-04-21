@@ -82,7 +82,7 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res) => {
         if (err) {
           return res.status(500).json({ error: 'Database error' });
         }
-        res.json({ ...supplier, stats });
+        res.json({ ...(supplier as Record<string, unknown>), stats });
       }
     );
   });

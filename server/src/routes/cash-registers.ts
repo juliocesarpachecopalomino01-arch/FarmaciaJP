@@ -485,7 +485,7 @@ router.post('/audit/open', authenticateToken, [
                 (fetchErr, row) => {
                   if (fetchErr) return res.status(500).json({ error: 'Database error' });
                   res.json({
-                    ...(row || {}),
+                    ...((row || {}) as Record<string, unknown>),
                     message: 'Caja reabierta en modo arqueo',
                     audit_mode: true,
                   });

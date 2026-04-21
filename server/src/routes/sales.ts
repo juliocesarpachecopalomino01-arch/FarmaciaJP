@@ -228,7 +228,7 @@ router.get('/:id', (req, res) => {
           if (err) {
             return res.status(500).json({ error: 'Database error' });
           }
-          res.json({ ...sale, items });
+          res.json({ ...(sale as Record<string, unknown>), items });
         }
       );
     }
