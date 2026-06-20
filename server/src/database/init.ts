@@ -158,6 +158,10 @@ export function initializeDatabase(): Promise<void> {
           name TEXT NOT NULL,
           description TEXT,
           barcode TEXT UNIQUE,
+          sanitary_registration TEXT,
+          lot_number TEXT,
+          presentation TEXT,
+          laboratory TEXT,
           category_id INTEGER,
           unit_price REAL NOT NULL,
           cost_price REAL,
@@ -602,6 +606,10 @@ export function initializeDatabase(): Promise<void> {
           addColumn('expiration_date', 'DATE');
           addColumn('has_sales_bonus', 'INTEGER DEFAULT 0');
           addColumn('sales_bonus_per_unit', 'REAL DEFAULT 0');
+          addColumn('sanitary_registration', 'TEXT');
+          addColumn('lot_number', 'TEXT');
+          addColumn('presentation', 'TEXT');
+          addColumn('laboratory', 'TEXT');
         }
       });
 

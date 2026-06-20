@@ -14,7 +14,7 @@ export default function Sales() {
   const [productSearch, setProductSearch] = useState('');
   const [isProductSearchOpen, setIsProductSearchOpen] = useState(false);
   const productSearchRef = useRef<HTMLInputElement | null>(null);
-  const [cart, setCart] = useState<Array<{ product_id: number; name: string; quantity: number; unit_price: number; discount: number }>>([]);
+  const [cart, setCart] = useState<Array<{ product_id: number; name: string; laboratory?: string; quantity: number; unit_price: number; discount: number }>>([]);
   const [saleForm, setSaleForm] = useState({
     customer_id: '',
     payment_method: 'cash',
@@ -96,6 +96,7 @@ export default function Sales() {
       setCart([...cart, {
         product_id: productId,
         name: product.name,
+        laboratory: product.laboratory || undefined,
         quantity: 1,
         unit_price: product.unit_price,
         discount: 0,
@@ -188,6 +189,10 @@ export default function Sales() {
   const isPaymentValid = !isCash || totalAmount <= 0 || (Number(saleForm.amount_paid) || 0) >= totalAmount;
   const availableProducts = (productsData?.products || []).filter((p) => (p.stock || 0) > 0 && (p.is_active === undefined || p.is_active === 1));
   const normalizedProductSearch = productSearch.trim().toLowerCase();
+  const getProductDisplayName = (product: { name: string; laboratory?: string }) => {
+    const laboratory = product.laboratory?.trim();
+    return laboratory ? `${product.name} | ${laboratory}` : product.name;
+  };
   const filteredProducts = availableProducts
     .filter((product) => {
       if (!normalizedProductSearch) return true;
@@ -195,6 +200,7 @@ export default function Sales() {
         product.name,
         product.barcode,
         product.category_name,
+        product.laboratory,
         product.unit_price?.toFixed(2),
       ].some((value) => String(value || '').toLowerCase().includes(normalizedProductSearch));
     })
@@ -256,7 +262,7 @@ export default function Sales() {
                         onClick={() => selectProduct(product.id)}
                       >
                         <span>
-                          <strong>{product.name}</strong>
+                          <strong>{getProductDisplayName(product)}</strong>
                           {product.barcode && <small>{product.barcode}</small>}
                         </span>
                         <span className="product-suggestion-meta">
@@ -293,7 +299,7 @@ export default function Sales() {
                     const subtotal = (item.unit_price * item.quantity) - item.discount;
                     return (
                       <tr key={item.product_id}>
-                        <td>{item.name}</td>
+                        <td>{getProductDisplayName(item)}</td>
                         <td>
                           <input
                             type="number"

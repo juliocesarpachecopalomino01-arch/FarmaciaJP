@@ -5,6 +5,10 @@ export interface Product {
   name: string;
   description?: string;
   barcode?: string;
+  sanitary_registration?: string;
+  lot_number?: string;
+  presentation?: string;
+  laboratory?: string;
   category_id?: number;
   category_name?: string;
   unit_price: number;

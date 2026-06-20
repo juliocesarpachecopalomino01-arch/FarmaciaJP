@@ -798,9 +798,44 @@ tbody tr {
   line-height: 1.15;
 }
 
+.product-detail-cell {
+  max-width: 130px;
+  color: #334155;
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: normal;
+  word-break: break-word;
+}
+
 .product-description,
 .product-code {
   line-height: 1.2;
+}
+
+.product-extra-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.22rem;
+  margin-top: 0.24rem;
+  max-width: 360px;
+}
+
+.product-extra-meta span {
+  display: inline-flex;
+  align-items: center;
+  max-width: 170px;
+  padding: 0.12rem 0.36rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #334155;
+  font-size: 0.64rem;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 @media (max-width: 1100px) {

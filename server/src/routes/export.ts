@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import { query } from 'express-validator';
 import XLSX from 'xlsx';
 import PDFDocument from 'pdfkit';
@@ -46,7 +46,7 @@ router.get('/sales/excel', authenticateToken, [
 
     // Format data for Excel
     const excelData = sales.map(sale => ({
-      'Número': sale.sale_number,
+      'NÃºmero': sale.sale_number,
       'Fecha Contable Caja': sale.accounting_date || '',
       'Fecha Registro Venta': new Date(sale.created_at).toLocaleString('es-ES'),
       'Cliente': sale.customer_name || 'Cliente General',
@@ -54,7 +54,7 @@ router.get('/sales/excel', authenticateToken, [
       'Descuento': sale.discount,
       'Impuesto': sale.tax_amount,
       'Total': sale.final_amount,
-      'Método de Pago': sale.payment_method,
+      'MÃ©todo de Pago': sale.payment_method,
       'Referencia de Pago': sale.payment_reference || '',
       'Vendedor': sale.user_name,
     }));
@@ -271,15 +271,15 @@ router.get('/purchases/excel', authenticateToken, [
     sendExcel(
       res,
       (purchases || []).map((purchase) => ({
-        'Número': purchase.purchase_number,
+        'NÃºmero': purchase.purchase_number,
         Proveedor: purchase.supplier_name || '',
         Usuario: purchase.user_name || '',
         Subtotal: Number(purchase.total_amount) || 0,
         Descuento: Number(purchase.discount) || 0,
         Impuesto: Number(purchase.tax_amount) || 0,
         Total: Number(purchase.final_amount) || 0,
-        'Afecta caja': purchase.afecta_caja ? 'Sí' : 'No',
-        'Método caja': purchase.afecta_caja ? (purchase.cash_payment_method || '') : '',
+        'Afecta caja': purchase.afecta_caja ? 'SÃ­' : 'No',
+        'MÃ©todo caja': purchase.afecta_caja ? (purchase.cash_payment_method || '') : '',
         Fecha: purchase.created_at ? new Date(purchase.created_at).toLocaleString('es-ES') : '',
         Notas: purchase.notes || '',
       })),
@@ -332,7 +332,7 @@ router.get('/returns/excel', authenticateToken, [
         Cliente: returnItem.customer_name || 'Cliente General',
         Usuario: returnItem.user_name || '',
         Monto: Number(returnItem.total_amount) || 0,
-        Razón: returnItem.reason || '',
+        'Razón': returnItem.reason || '',
         Estado: returnItem.status || '',
         Fecha: returnItem.created_at ? new Date(returnItem.created_at).toLocaleString('es-ES') : '',
         Notas: returnItem.notes || '',
@@ -346,7 +346,7 @@ router.get('/returns/excel', authenticateToken, [
 // Export products to Excel
 router.get('/products/excel', authenticateToken, (req: AuthRequest, res) => {
   db.all(
-    `SELECT p.name, p.barcode, c.name as category_name,
+    `SELECT p.name, p.description, p.barcode, p.sanitary_registration, p.lot_number, p.presentation, p.laboratory, c.name as category_name,
             p.unit_price, p.cost_price, 
             p.has_sales_bonus, p.sales_bonus_per_unit,
             COALESCE(i.quantity, 0) as stock,
@@ -367,7 +367,12 @@ router.get('/products/excel', authenticateToken, (req: AuthRequest, res) => {
       try {
         const excelData = (products ?? []).map((product: any) => ({
           'Nombre': product.name ?? '',
+          'Descripción': product.description ?? '',
           'Código de Barras': product.barcode ?? '',
+          'Registro Sanitario': product.sanitary_registration ?? '',
+          'Lote': product.lot_number ?? '',
+          'Presentación': product.presentation ?? '',
+          'Laboratorio': product.laboratory ?? '',
           'Categoría': product.category_name ?? '',
           'Precio Unitario': Number(product.unit_price) || 0,
           'Precio de Costo': product.cost_price != null ? Number(product.cost_price) : '',
@@ -408,7 +413,7 @@ router.get('/inventory/excel', authenticateToken, [
 ], (req: AuthRequest, res) => {
   const { search, category, status } = req.query;
   const params: any[] = [];
-  let sql = `SELECT p.name, p.barcode, c.name as category_name,
+  let sql = `SELECT p.name, p.description, p.barcode, p.sanitary_registration, p.lot_number, p.presentation, p.laboratory, c.name as category_name,
             i.quantity, i.min_stock, i.max_stock,
             p.unit_price, p.expiration_date,
             (i.quantity * p.unit_price) as stock_value,
@@ -458,11 +463,11 @@ router.get('/inventory/excel', authenticateToken, [
 
       const excelData = inventory.map(item => ({
         'Producto': item.name,
-        'Código': item.barcode || '',
-        'Categoría': item.category_name || '',
+        'CÃ³digo': item.barcode || '',
+        'CategorÃ­a': item.category_name || '',
         'Stock Actual': item.quantity,
-        'Stock Mínimo': item.min_stock,
-        'Stock Máximo': item.max_stock || '',
+        'Stock MÃ­nimo': item.min_stock,
+        'Stock MÃ¡ximo': item.max_stock || '',
         'Precio Unitario': item.unit_price,
         'Fecha de Vencimiento': item.expiration_date || '',
         'Valor del Stock': item.stock_value,
@@ -503,7 +508,7 @@ function sendExcel(res: any, rows: Record<string, unknown>[], sheetName: string,
 
 router.get('/alerts/low-stock/excel', authenticateToken, (req: AuthRequest, res) => {
   db.all(
-    `SELECT p.name, p.barcode, c.name as category_name, i.quantity, i.min_stock, i.location
+    `SELECT p.name, p.description, p.barcode, p.sanitary_registration, p.lot_number, p.presentation, p.laboratory, c.name as category_name, i.quantity, i.min_stock, i.location
      FROM inventory i
      INNER JOIN products p ON i.product_id = p.id
      LEFT JOIN categories c ON p.category_id = c.id
@@ -536,7 +541,7 @@ router.get('/alerts/expiring-soon/excel', authenticateToken, [
   const days = Number(req.query.days) || 30;
 
   db.all(
-    `SELECT p.name, p.barcode, c.name as category_name, COALESCE(i.quantity, 0) as stock,
+    `SELECT p.name, p.description, p.barcode, p.sanitary_registration, p.lot_number, p.presentation, p.laboratory, c.name as category_name, COALESCE(i.quantity, 0) as stock,
             p.expiration_date,
             julianday(p.expiration_date) - julianday('now') as days_until_expiration
      FROM products p
@@ -570,7 +575,7 @@ router.get('/alerts/expiring-soon/excel', authenticateToken, [
 
 router.get('/alerts/expired/excel', authenticateToken, (req: AuthRequest, res) => {
   db.all(
-    `SELECT p.name, p.barcode, c.name as category_name, COALESCE(i.quantity, 0) as stock,
+    `SELECT p.name, p.description, p.barcode, p.sanitary_registration, p.lot_number, p.presentation, p.laboratory, c.name as category_name, COALESCE(i.quantity, 0) as stock,
             p.expiration_date,
             julianday('now') - julianday(p.expiration_date) as days_expired
      FROM products p
@@ -822,3 +827,4 @@ router.get('/products-sold-by-user/excel', authenticateToken, [
 });
 
 export default router;
+

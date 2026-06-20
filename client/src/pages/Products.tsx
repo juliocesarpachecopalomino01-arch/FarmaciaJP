@@ -22,6 +22,10 @@ export default function Products() {
     name: '',
     description: '',
     barcode: '',
+    sanitary_registration: '',
+    lot_number: '',
+    presentation: '',
+    laboratory: '',
     category_id: '',
     unit_price: '',
     cost_price: '',
@@ -88,6 +92,10 @@ export default function Products() {
       name: '',
       description: '',
       barcode: '',
+      sanitary_registration: '',
+      lot_number: '',
+      presentation: '',
+      laboratory: '',
       category_id: '',
       unit_price: '',
       cost_price: '',
@@ -104,6 +112,10 @@ export default function Products() {
       name: product.name,
       description: product.description || '',
       barcode: product.barcode || '',
+      sanitary_registration: product.sanitary_registration || '',
+      lot_number: product.lot_number || '',
+      presentation: product.presentation || '',
+      laboratory: product.laboratory || '',
       category_id: product.category_id?.toString() || '',
       unit_price: product.unit_price.toString(),
       cost_price: product.cost_price?.toString() || '',
@@ -143,6 +155,10 @@ export default function Products() {
       name: formData.name,
       description: formData.description || undefined,
       barcode: formData.barcode || undefined,
+      sanitary_registration: formData.sanitary_registration || undefined,
+      lot_number: formData.lot_number || undefined,
+      presentation: formData.presentation || undefined,
+      laboratory: formData.laboratory || undefined,
       category_id: formData.category_id ? Number(formData.category_id) : undefined,
       unit_price: Number(formData.unit_price),
       cost_price: formData.cost_price ? Number(formData.cost_price) : undefined,
@@ -304,6 +320,10 @@ export default function Products() {
               <tr>
                 <th>Nombre</th>
                 <th>Código</th>
+                <th>Reg. Sanitario</th>
+                <th>Lote</th>
+                <th>Presentación</th>
+                <th>Laboratorio</th>
                 <th>Categoría</th>
                 <th>Precio</th>
                 <th>Stock</th>
@@ -324,6 +344,10 @@ export default function Products() {
                   )}
                 </td>
                 <td>{product.barcode || '-'}</td>
+                <td className="product-detail-cell">{product.sanitary_registration || '-'}</td>
+                <td className="product-detail-cell">{product.lot_number || '-'}</td>
+                <td className="product-detail-cell">{product.presentation || '-'}</td>
+                <td className="product-detail-cell">{product.laboratory || '-'}</td>
                 <td>
                   <span className="category-badge">{product.category_name || 'Sin categoría'}</span>
                 </td>
@@ -468,6 +492,43 @@ export default function Products() {
                       </option>
                     ))}
                   </select>
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Registro Sanitario</label>
+                  <input
+                    type="text"
+                    value={formData.sanitary_registration}
+                    onChange={(e) => setFormData({ ...formData, sanitary_registration: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Lote</label>
+                  <input
+                    type="text"
+                    value={formData.lot_number}
+                    onChange={(e) => setFormData({ ...formData, lot_number: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Presentación</label>
+                  <input
+                    type="text"
+                    placeholder="Ej. Caja x 10 tabletas"
+                    value={formData.presentation}
+                    onChange={(e) => setFormData({ ...formData, presentation: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Laboratorio</label>
+                  <input
+                    type="text"
+                    value={formData.laboratory}
+                    onChange={(e) => setFormData({ ...formData, laboratory: e.target.value })}
+                  />
                 </div>
               </div>
               <div className="form-row">
@@ -653,7 +714,7 @@ export default function Products() {
           <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
             <h2>Importar Productos desde Excel</h2>
             <p className="modal-subtitle">
-              Selecciona un archivo Excel (.xlsx) con las columnas: <strong>Nombre</strong>, <strong>Precio</strong>, Descripción, Código de Barras, Categoría, Precio de Costo, Requiere Receta, Fecha de Vencimiento. Descarga la plantilla de ejemplo para rellenar correctamente.
+              Selecciona un archivo Excel (.xlsx) con las columnas: <strong>Nombre</strong>, <strong>Precio</strong>, Descripción, Código de Barras, Registro Sanitario, Lote, Presentación, Laboratorio, Categoría, Precio de Costo, Requiere Receta y Fecha de Vencimiento. Descarga la plantilla de ejemplo para rellenar correctamente.
             </p>
             <div className="form-group" style={{ marginBottom: '1rem' }}>
               <button

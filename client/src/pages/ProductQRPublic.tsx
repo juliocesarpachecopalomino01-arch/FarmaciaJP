@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import api from '../api/client';
-import { Package, DollarSign, Calendar, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
+import { Package, DollarSign, Calendar, AlertCircle, CheckCircle2, XCircle, ClipboardList, FlaskConical } from 'lucide-react';
 import './ProductQRPublic.css';
 
 interface ProductInfo {
@@ -9,6 +9,10 @@ interface ProductInfo {
   name: string;
   description?: string;
   barcode?: string;
+  sanitary_registration?: string;
+  lot_number?: string;
+  presentation?: string;
+  laboratory?: string;
   category_id?: number;
   category_name?: string;
   unit_price: number;
@@ -142,6 +146,46 @@ export default function ProductQRPublic() {
                 {product.category_name || 'Sin categoría'}
               </div>
             </div>
+
+            {product.sanitary_registration && (
+              <div className="detail-item-public">
+                <div className="detail-label-public">
+                  <ClipboardList size={18} />
+                  <span>Registro Sanitario</span>
+                </div>
+                <div className="detail-value-public">{product.sanitary_registration}</div>
+              </div>
+            )}
+
+            {product.lot_number && (
+              <div className="detail-item-public">
+                <div className="detail-label-public">
+                  <Package size={18} />
+                  <span>Lote</span>
+                </div>
+                <div className="detail-value-public">{product.lot_number}</div>
+              </div>
+            )}
+
+            {product.presentation && (
+              <div className="detail-item-public">
+                <div className="detail-label-public">
+                  <Package size={18} />
+                  <span>Presentación</span>
+                </div>
+                <div className="detail-value-public">{product.presentation}</div>
+              </div>
+            )}
+
+            {product.laboratory && (
+              <div className="detail-item-public">
+                <div className="detail-label-public">
+                  <FlaskConical size={18} />
+                  <span>Laboratorio</span>
+                </div>
+                <div className="detail-value-public">{product.laboratory}</div>
+              </div>
+            )}
 
             <div className="detail-item-public">
               <div className="detail-label-public">
