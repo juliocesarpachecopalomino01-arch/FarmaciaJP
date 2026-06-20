@@ -371,6 +371,209 @@
   }
 }
 
+/* Operation screens: compact POS/purchase workspace with more character. */
+.operation-status-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 0.5rem;
+  margin: -0.2rem 0 0.75rem;
+}
+
+.operation-pill {
+  min-height: 38px;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius);
+  border: 1px solid rgba(21, 94, 239, 0.14);
+  background: linear-gradient(135deg, #ffffff 0%, #f4f9ff 100%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.operation-pill span {
+  color: var(--text-light);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.operation-pill strong {
+  color: var(--text);
+  font-weight: 900;
+  text-align: right;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-pill.success {
+  background: linear-gradient(135deg, #ecfdf5 0%, #dcfce7 100%);
+  border-color: #a7f3d0;
+}
+
+.operation-pill.success strong {
+  color: var(--success-dark);
+}
+
+.operation-pill.danger {
+  background: linear-gradient(135deg, #fff1f4 0%, #ffe4ea 100%);
+  border-color: #fecdd3;
+}
+
+.operation-pill.danger strong {
+  color: var(--danger-dark);
+}
+
+.operation-pill.info {
+  background: linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%);
+  border-color: #bfdbfe;
+}
+
+.operation-pill.info strong {
+  color: var(--primary-dark);
+}
+
+.operation-pill.accent {
+  background: linear-gradient(135deg, #eef6ff 0%, #e8fff5 100%);
+  border-color: #93c5fd;
+}
+
+.operation-pill.accent strong {
+  color: var(--primary);
+}
+
+.operation-pill.neutral {
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.sale-form-container,
+.purchase-form-container {
+  border: 1px solid rgba(21, 94, 239, 0.14);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(244, 249, 255, 0.9)),
+    var(--surface);
+  padding: 0.65rem;
+  box-shadow: 0 10px 24px rgba(15, 94, 239, 0.06);
+}
+
+.sale-form-left,
+.purchase-main {
+  background: #ffffff;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 0.65rem;
+}
+
+.sale-form-right,
+.purchase-summary-panel {
+  border: 1px solid rgba(0, 167, 165, 0.18) !important;
+  background:
+    linear-gradient(180deg, #f7fdff 0%, #ffffff 100%) !important;
+  box-shadow: inset 3px 0 0 rgba(0, 167, 165, 0.55) !important;
+}
+
+.cart-items h3 {
+  color: var(--primary-dark);
+}
+
+.product-combobox {
+  position: relative;
+}
+
+.product-combobox input {
+  width: 100%;
+}
+
+.product-suggestions {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 190px;
+  overflow-y: auto;
+  border: 1px solid #b8d4ef;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.16);
+}
+
+.product-suggestion {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 0;
+  border-bottom: 1px solid #eef3f8;
+  background: #ffffff;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.product-suggestion:hover,
+.product-suggestion:focus {
+  outline: none;
+  background: linear-gradient(90deg, #eaf4ff, #effdf5);
+}
+
+.product-suggestion strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-suggestion small {
+  display: block;
+  margin-top: 1px;
+  color: var(--text-light);
+}
+
+.product-suggestion-meta {
+  color: var(--primary-dark);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.product-suggestion-empty {
+  padding: 8px;
+  color: var(--text-light);
+  font-weight: 700;
+  text-align: center;
+}
+
+.cart-table {
+  border-top: 2px solid var(--accent-teal, var(--primary));
+}
+
+.cart-table tbody tr:hover {
+  box-shadow: inset 3px 0 0 var(--accent-teal, var(--primary));
+}
+
+.sale-totals {
+  background: linear-gradient(135deg, #f8fbff 0%, #effdf5 100%);
+  border: 1px solid rgba(21, 94, 239, 0.14);
+  border-radius: var(--radius);
+  padding: 0.55rem;
+}
+
+.total-final {
+  color: var(--primary-dark);
+}
+
+@media (max-width: 760px) {
+  .operation-status-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .cash-change-row {
   display: flex;
   justify-content: space-between;

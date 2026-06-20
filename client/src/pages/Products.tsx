@@ -1,9 +1,9 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { productsApi, Product } from '../api/products';
 import { categoriesApi } from '../api/categories';
 import { priceHistoryApi } from '../api/priceHistory';
-import { Plus, Edit, Search, History, Layers, Filter, CheckCircle2, XCircle, Package, Power, PowerOff, Upload, QrCode, Download } from 'lucide-react';
+import { Plus, Edit, Search, History, Layers, Filter, CheckCircle2, XCircle, Package, Power, PowerOff, Upload, QrCode, Download, Boxes, AlertTriangle, BadgeDollarSign, ShieldCheck } from 'lucide-react';
 import './Products.css';
 
 export default function Products() {
@@ -25,6 +25,8 @@ export default function Products() {
     category_id: '',
     unit_price: '',
     cost_price: '',
+    has_sales_bonus: false,
+    sales_bonus_per_unit: '',
     requires_prescription: false,
     expiration_date: '',
   });
@@ -89,6 +91,8 @@ export default function Products() {
       category_id: '',
       unit_price: '',
       cost_price: '',
+      has_sales_bonus: false,
+      sales_bonus_per_unit: '',
       requires_prescription: false,
       expiration_date: '',
     });
@@ -103,6 +107,8 @@ export default function Products() {
       category_id: product.category_id?.toString() || '',
       unit_price: product.unit_price.toString(),
       cost_price: product.cost_price?.toString() || '',
+      has_sales_bonus: Boolean(product.has_sales_bonus),
+      sales_bonus_per_unit: product.sales_bonus_per_unit?.toString() || '',
       requires_prescription: product.requires_prescription,
       expiration_date: product.expiration_date ? product.expiration_date.split('T')[0] : '',
     });
@@ -114,6 +120,14 @@ export default function Products() {
     const action = newActive ? 'activar' : 'desactivar';
     if (window.confirm(`¿Está seguro de ${action} el producto "${product.name}"?`)) {
       updateMutation.mutate({ id: product.id, product: { is_active: newActive } });
+    }
+  };
+
+  const handleExportProducts = async () => {
+    try {
+      await productsApi.exportExcel();
+    } catch (error: any) {
+      alert(error?.message || 'Error al exportar productos');
     }
   };
 
@@ -132,6 +146,8 @@ export default function Products() {
       category_id: formData.category_id ? Number(formData.category_id) : undefined,
       unit_price: Number(formData.unit_price),
       cost_price: formData.cost_price ? Number(formData.cost_price) : undefined,
+      has_sales_bonus: formData.has_sales_bonus,
+      sales_bonus_per_unit: formData.has_sales_bonus ? Number(formData.sales_bonus_per_unit || 0) : 0,
       requires_prescription: formData.requires_prescription,
       expiration_date: formData.expiration_date || undefined,
     };
@@ -156,6 +172,24 @@ export default function Products() {
     return days <= 30 ? 'expiration-soon' : '';
   };
 
+  const productStats = products.reduce(
+    (acc, product) => {
+      const stock = Number(product.stock || 0);
+      const minStock = Number(product.min_stock || 0);
+      const isLowStock = minStock > 0 && stock <= minStock;
+      const hasBonus = Boolean(product.has_sales_bonus) && Number(product.sales_bonus_per_unit || 0) > 0;
+      const isActive = product.is_active === undefined || product.is_active === 1;
+      const isExpiring = product.expiration_date ? getExpirationClass(product.expiration_date) === 'expiration-soon' : false;
+      if (isActive) acc.active += 1;
+      if (!isActive) acc.inactive += 1;
+      if (isLowStock) acc.lowStock += 1;
+      if (isExpiring) acc.expiring += 1;
+      if (hasBonus) acc.withBonus += 1;
+      return acc;
+    },
+    { active: 0, inactive: 0, lowStock: 0, expiring: 0, withBonus: 0 }
+  );
+
   return (
     <div className="page-container">
       <div className="page-header">
@@ -163,15 +197,50 @@ export default function Products() {
           <h1>Productos</h1>
           <p>Gestión de productos de la farmacia</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div className="header-actions">
+          <button className="btn-secondary" onClick={handleExportProducts}>
+            <Download size={16} />
+            Exportar Excel
+          </button>
           <button className="btn-secondary" onClick={() => setShowImportModal(true)}>
-            <Upload size={20} />
+            <Upload size={16} />
             Importar Excel
           </button>
           <button className="btn-primary" onClick={() => { resetForm(); setEditingProduct(null); setShowModal(true); }}>
-            <Plus size={20} />
+            <Plus size={16} />
             Nuevo Producto
           </button>
+        </div>
+      </div>
+
+      <div className="products-summary-grid">
+        <div className="product-summary-card summary-blue">
+          <span><Boxes size={15} /></span>
+          <div>
+            <strong>{products.length}</strong>
+            <small>Registrados</small>
+          </div>
+        </div>
+        <div className="product-summary-card summary-green">
+          <span><ShieldCheck size={15} /></span>
+          <div>
+            <strong>{productStats.active}</strong>
+            <small>Activos</small>
+          </div>
+        </div>
+        <div className="product-summary-card summary-amber">
+          <span><AlertTriangle size={15} /></span>
+          <div>
+            <strong>{productStats.lowStock}</strong>
+            <small>Stock bajo</small>
+          </div>
+        </div>
+        <div className="product-summary-card summary-teal">
+          <span><BadgeDollarSign size={15} /></span>
+          <div>
+            <strong>{productStats.withBonus}</strong>
+            <small>Con bono</small>
+          </div>
         </div>
       </div>
 
@@ -241,6 +310,7 @@ export default function Products() {
                 <th>Fecha Venc.</th>
                 <th>Estado</th>
                 <th>Requiere Receta</th>
+                <th>Bono</th>
                 <th>Acciones</th>
               </tr>
             </thead>
@@ -258,7 +328,7 @@ export default function Products() {
                   <span className="category-badge">{product.category_name || 'Sin categoría'}</span>
                 </td>
                 <td>
-                  <span className="price-value">${product.unit_price.toFixed(2)}</span>
+                  <span className="price-value">S/ {product.unit_price.toFixed(2)}</span>
                 </td>
                 <td>
                   <div className="stock-cell">
@@ -277,7 +347,7 @@ export default function Products() {
                       {new Date(product.expiration_date).toLocaleDateString('es-ES')}
                     </span>
                   ) : (
-                    <span className="text-muted">—</span>
+                    <span className="text-muted">-</span>
                   )}
                 </td>
                 <td>
@@ -300,11 +370,12 @@ export default function Products() {
                     {product.requires_prescription ? 'Sí' : 'No'}
                   </span>
                 </td>
+                <td>{product.has_sales_bonus ? `S/ ${Number(product.sales_bonus_per_unit || 0).toFixed(2)} / und.` : '-'}</td>
                 <td>
                   <div className="action-buttons">
                     <button
                       onClick={() => handleToggleActive(product)}
-                      className="btn-icon"
+                      className="btn-icon action-toggle"
                       title={product.is_active === 1 ? 'Desactivar producto' : 'Activar producto'}
                     >
                       {product.is_active === 1 ? (
@@ -319,7 +390,7 @@ export default function Products() {
                         setSelectedProduct(product);
                         setShowHistoryModal(true);
                       }} 
-                      className="btn-icon"
+                      className="btn-icon action-history"
                       title="Ver historial de precios"
                     >
                       <History size={16} />
@@ -329,19 +400,19 @@ export default function Products() {
                         setSelectedProductId(product.id);
                         setShowLotsModal(true);
                       }} 
-                      className="btn-icon"
+                      className="btn-icon action-layers"
                       title="Ver lotes"
                     >
                       <Layers size={16} />
                     </button>
                     <button 
                       onClick={() => handleShowQR(product)} 
-                      className="btn-icon"
+                      className="btn-icon action-qr"
                       title="Ver código QR"
                     >
                       <QrCode size={16} />
                     </button>
-                    <button onClick={() => handleEdit(product)} className="btn-icon" title="Editar">
+                    <button onClick={() => handleEdit(product)} className="btn-icon action-edit" title="Editar">
                       <Edit size={16} />
                     </button>
                   </div>
@@ -422,6 +493,29 @@ export default function Products() {
                   />
                 </div>
               </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={formData.has_sales_bonus}
+                      onChange={(e) => setFormData({ ...formData, has_sales_bonus: e.target.checked })}
+                    />
+                    Bono por venta por unidad
+                  </label>
+                </div>
+                <div className="form-group">
+                  <label>Bono por unidad</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.sales_bonus_per_unit}
+                    onChange={(e) => setFormData({ ...formData, sales_bonus_per_unit: e.target.value })}
+                    disabled={!formData.has_sales_bonus}
+                  />
+                </div>
+              </div>
               <div className="form-group">
                 <label>Fecha de vencimiento</label>
                 <input
@@ -493,22 +587,22 @@ export default function Products() {
                         <tr key={entry.id} className={isCurrent ? 'current-price' : ''}>
                           <td>
                             {entry.old_unit_price !== null && entry.old_unit_price !== undefined 
-                              ? `$${entry.old_unit_price.toFixed(2)}` 
+                              ? `S/ ${entry.old_unit_price.toFixed(2)}` 
                               : <span style={{ color: 'var(--text-light)', fontStyle: 'italic' }}>Sin precio anterior</span>}
                           </td>
                           <td className={entry.old_unit_price !== null && entry.new_unit_price !== null && entry.old_unit_price !== entry.new_unit_price ? 'price-changed' : ''}>
                             {entry.new_unit_price !== null && entry.new_unit_price !== undefined 
-                              ? `$${entry.new_unit_price.toFixed(2)}` 
+                              ? `S/ ${entry.new_unit_price.toFixed(2)}` 
                               : '-'}
                           </td>
                           <td>
                             {entry.old_cost_price !== null && entry.old_cost_price !== undefined && entry.old_cost_price > 0
-                              ? <span style={{ fontWeight: '600', color: 'var(--primary)' }}>${entry.old_cost_price.toFixed(2)}</span>
+                              ? <span style={{ fontWeight: '600', color: 'var(--primary)' }}>S/ {entry.old_cost_price.toFixed(2)}</span>
                               : <span style={{ color: 'var(--text-light)', fontStyle: 'italic' }}>Sin precio anterior</span>}
                           </td>
                           <td className={entry.old_cost_price !== null && entry.new_cost_price !== null && entry.old_cost_price !== entry.new_cost_price ? 'price-changed cost-price' : entry.new_cost_price && entry.new_cost_price > 0 ? 'cost-price' : ''}>
                             {entry.new_cost_price !== null && entry.new_cost_price !== undefined && entry.new_cost_price > 0
-                              ? <span style={{ fontWeight: '600', color: 'var(--success)' }}>${entry.new_cost_price.toFixed(2)}</span>
+                              ? <span style={{ fontWeight: '600', color: 'var(--success)' }}>S/ {entry.new_cost_price.toFixed(2)}</span>
                               : <span style={{ color: 'var(--text-light)' }}>-</span>}
                           </td>
                           <td>
@@ -722,3 +816,5 @@ export default function Products() {
     </div>
   );
 }
+
+

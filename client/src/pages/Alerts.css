@@ -107,15 +107,27 @@
 .alerts-section-header {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  justify-content: space-between;
+  gap: 0.75rem;
   margin: 0.25rem 0 0.75rem;
   color: var(--text);
+}
+
+.alerts-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
 }
 
 .alerts-section-header h2 {
   font-size: 1.1rem;
   font-weight: 800;
   margin: 0;
+}
+
+.alerts-section-header .btn-secondary {
+  width: fit-content;
+  padding: 0.55rem 0.8rem;
 }
 
 .empty-cell {

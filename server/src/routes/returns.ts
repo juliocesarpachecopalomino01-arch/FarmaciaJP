@@ -10,6 +10,15 @@ const router = express.Router();
 // Can be overridden via env var for production.
 const DEVOLUTION_PASSWORD = process.env.RETURNS_PASSWORD || 'd3v0luc10n$2026$*';
 
+function getCompanyPassword(field: 'cash_reopen_password' | 'return_password', fallback: string): Promise<string> {
+  return new Promise((resolve) => {
+    db.get(`SELECT ${field} as password FROM company_settings WHERE id = 1`, [], (err, row: any) => {
+      if (err || !row?.password) return resolve(fallback);
+      resolve(String(row.password));
+    });
+  });
+}
+
 interface CashRegisterError {
   code: 'NO_CASH_REGISTER' | 'DB_ERROR';
   message: string;
@@ -148,7 +157,7 @@ router.post('/', authenticateToken, [
 
   // Get sale info (must belong to same user and same cash register ID)
   db.get(
-    `SELECT id, sale_number, customer_id, user_id, cash_register_id
+    `SELECT id, sale_number, customer_id, user_id, cash_register_id, payment_method
      FROM sales
      WHERE id = ?`,
     [sale_id],
@@ -188,11 +197,13 @@ router.post('/', authenticateToken, [
               requires_password: true,
             });
           }
-          if (password !== DEVOLUTION_PASSWORD) {
-            return res.status(403).json({ error: 'Contraseña incorrecta.' });
-          }
+          getCompanyPassword('return_password', DEVOLUTION_PASSWORD).then((configuredPassword) => {
+            if (password !== configuredPassword) {
+              return res.status(403).json({ error: 'Contraseña incorrecta.' });
+            }
 
-          proceedWithReturn();
+            proceedWithReturn();
+          });
         })
         .catch((e: CashRegisterError) => {
           if (e?.code === 'NO_CASH_REGISTER') {
@@ -341,18 +352,37 @@ router.post('/', authenticateToken, [
                                   );
                                 }
 
-                                // Log audit
-                                logAction(req.user!.id, 'CREATE', 'return', returnId, null, {
-                                  return_number: returnNumber,
-                                  sale_id: sale_id,
-                                  total_amount: totalAmount,
-                                }, req);
+                                db.run(
+                                  `INSERT INTO cash_movements (cash_register_id, movement_type, amount, payment_method, reference_type, reference_id, description, user_id)
+                                   VALUES (?, 'return', ?, ?, 'return', ?, ?, ?)`,
+                                  [
+                                    sale.cash_register_id,
+                                    -Math.abs(totalAmount),
+                                    sale.payment_method || null,
+                                    returnId,
+                                    `Devolución ${returnNumber} de venta ${sale.sale_number}`,
+                                    req.user!.id,
+                                  ],
+                                  (cashMovementErr) => {
+                                    if (cashMovementErr) {
+                                      return res.status(500).json({ error: 'Error registrando movimiento de caja de la devolución' });
+                                    }
 
-                                res.status(201).json({
-                                  id: returnId,
-                                  return_number: returnNumber,
-                                  message: 'Return processed successfully',
-                                });
+                                    // Log audit
+                                    logAction(req.user!.id, 'CREATE', 'return', returnId, null, {
+                                      return_number: returnNumber,
+                                      sale_id: sale_id,
+                                      total_amount: totalAmount,
+                                      cash_movement_amount: -Math.abs(totalAmount),
+                                    }, req);
+
+                                    res.status(201).json({
+                                      id: returnId,
+                                      return_number: returnNumber,
+                                      message: 'Return processed successfully',
+                                    });
+                                  }
+                                );
                               }
                             );
                           }

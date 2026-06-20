@@ -23,6 +23,19 @@ function getOpenCashRegister(userId: number): Promise<{ id: number } | null> {
   });
 }
 
+function validateCashPaymentMethod(paymentMethod: string): Promise<{ value: string; name: string } | null> {
+  return new Promise((resolve) => {
+    db.get(
+      'SELECT value, name FROM payment_methods WHERE value = ? AND is_active = 1',
+      [paymentMethod],
+      (err, row: any) => {
+        if (err || !row) resolve(null);
+        else resolve({ value: row.value, name: row.name });
+      }
+    );
+  });
+}
+
 // Get all purchases
 router.get('/', authenticateToken, [
   query('start_date').optional(),
@@ -35,10 +48,11 @@ router.get('/', authenticateToken, [
   const offset = (Number(page) - 1) * Number(limit);
 
   let query = `
-    SELECT p.*, s.name as supplier_name, u.username as user_name
+    SELECT p.*, s.name as supplier_name, u.username as user_name, pm.name as cash_payment_method_name
     FROM purchases p
     INNER JOIN suppliers s ON p.supplier_id = s.id
     INNER JOIN users u ON p.user_id = u.id
+    LEFT JOIN payment_methods pm ON pm.value = p.cash_payment_method
     WHERE 1=1
   `;
   const params: any[] = [];
@@ -117,10 +131,11 @@ router.get('/:id', authenticateToken, async (req: AuthRequest, res) => {
   const { id } = req.params;
 
   db.get(
-    `SELECT p.*, s.name as supplier_name, u.username as user_name
+    `SELECT p.*, s.name as supplier_name, u.username as user_name, pm.name as cash_payment_method_name
      FROM purchases p
      INNER JOIN suppliers s ON p.supplier_id = s.id
      INNER JOIN users u ON p.user_id = u.id
+     LEFT JOIN payment_methods pm ON pm.value = p.cash_payment_method
      WHERE p.id = ?`,
     [id],
     async (err, purchase: any) => {
@@ -161,6 +176,7 @@ router.post('/', authenticateToken, [
   body('items.*.product_id').isInt().withMessage('Product ID is required'),
   body('items.*.quantity').isInt({ min: 1 }).withMessage('Valid quantity is required'),
   body('items.*.cost_price').isFloat({ min: 0 }).withMessage('Valid cost price is required'),
+  body('cash_payment_method').optional().isString(),
 ], async (req: AuthRequest, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -174,15 +190,27 @@ router.post('/', authenticateToken, [
     tax_amount = 0,
     notes,
     afecta_caja = false,
+    cash_payment_method,
   } = req.body;
 
   let cashRegisterId: number | null = null;
+  let resolvedCashPaymentMethod: string | null = null;
   if (afecta_caja) {
     const openCaja = await getOpenCashRegister(req.user!.id);
     if (!openCaja) {
       return res.status(400).json({ error: 'Debes tener una caja abierta para registrar compras que afectan a caja.' });
     }
     cashRegisterId = openCaja.id;
+
+    if (!cash_payment_method) {
+      return res.status(400).json({ error: 'Debes seleccionar el método con el que la compra afecta a caja.' });
+    }
+
+    const paymentMethod = await validateCashPaymentMethod(String(cash_payment_method));
+    if (!paymentMethod) {
+      return res.status(400).json({ error: 'El método seleccionado para afectar caja no existe o está desactivado.' });
+    }
+    resolvedCashPaymentMethod = paymentMethod.value;
   }
 
   // Generate purchase number
@@ -237,9 +265,9 @@ router.post('/', authenticateToken, [
 
       // Create purchase
       db.run(
-        `INSERT INTO purchases (purchase_number, supplier_id, user_id, total_amount, discount, tax_amount, final_amount, notes, afecta_caja, cash_register_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [purchaseNumber, supplier_id, req.user!.id, totalAmount, discount, tax_amount, finalAmount, notes || null, afecta_caja ? 1 : 0, cashRegisterId],
+        `INSERT INTO purchases (purchase_number, supplier_id, user_id, total_amount, discount, tax_amount, final_amount, notes, afecta_caja, cash_register_id, cash_payment_method)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [purchaseNumber, supplier_id, req.user!.id, totalAmount, discount, tax_amount, finalAmount, notes || null, afecta_caja ? 1 : 0, cashRegisterId, resolvedCashPaymentMethod],
         function(err) {
           if (err) {
             return res.status(500).json({ error: 'Database error' });
@@ -291,35 +319,42 @@ router.post('/', authenticateToken, [
                     return res.status(500).json({ error: errors.join(', ') });
                   }
 
-                  // If afecta_caja: record cash movement (outflow)
+                  const finishPurchase = () => {
+                    logAction(req.user!.id, 'CREATE', 'purchase', purchaseId, null, {
+                      purchase_number: purchaseNumber,
+                      supplier_id: supplier_id,
+                      total_amount: totalAmount,
+                      final_amount: finalAmount,
+                      items_count: purchaseItems.length,
+                      afecta_caja,
+                      cash_payment_method: resolvedCashPaymentMethod,
+                    }, req);
+
+                    res.status(201).json({
+                      id: purchaseId,
+                      purchase_number: purchaseNumber,
+                      message: 'Purchase created successfully',
+                    });
+                  };
+
+                  // If afecta_caja: record cash movement (outflow) before confirming the purchase.
                   if (afecta_caja && cashRegisterId) {
                     db.run(
-                      `INSERT INTO cash_movements (cash_register_id, movement_type, amount, reference_type, reference_id, description, user_id)
-                       VALUES (?, 'purchase', ?, 'purchase', ?, ?, ?)`,
-                      [cashRegisterId, -finalAmount, purchaseId, `Compra ${purchaseNumber}`, req.user!.id],
+                      `INSERT INTO cash_movements (cash_register_id, movement_type, amount, payment_method, reference_type, reference_id, description, user_id)
+                       VALUES (?, 'purchase', ?, ?, 'purchase', ?, ?, ?)`,
+                      [cashRegisterId, -finalAmount, resolvedCashPaymentMethod, purchaseId, `Compra ${purchaseNumber}`, req.user!.id],
                       (cmErr) => {
                         if (cmErr) {
                           console.error('Error recording cash movement for purchase:', cmErr);
+                          return res.status(500).json({ error: 'No se pudo afectar la caja de la compra.' });
                         }
+                        finishPurchase();
                       }
                     );
+                    return;
                   }
 
-                  // Log audit
-                  logAction(req.user!.id, 'CREATE', 'purchase', purchaseId, null, {
-                    purchase_number: purchaseNumber,
-                    supplier_id: supplier_id,
-                    total_amount: totalAmount,
-                    final_amount: finalAmount,
-                    items_count: purchaseItems.length,
-                    afecta_caja,
-                  }, req);
-
-                  res.status(201).json({
-                    id: purchaseId,
-                    purchase_number: purchaseNumber,
-                    message: 'Purchase created successfully',
-                  });
+                  finishPurchase();
                 }
               }
             );

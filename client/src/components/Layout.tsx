@@ -20,8 +20,36 @@ import {
   ShoppingBag,
   Search,
   QrCode,
+  CreditCard,
+  Building2,
+  ClipboardList,
 } from 'lucide-react';
 import './Layout.css';
+
+type MenuSection = 'Inicio' | 'Operación' | 'Inventario' | 'Gestión' | 'Reportes' | 'Configuración';
+
+const sections: MenuSection[] = ['Inicio', 'Operación', 'Inventario', 'Gestión', 'Reportes', 'Configuración'];
+
+const allMenuItems = [
+  { path: '/', icon: LayoutDashboard, label: 'Dashboard', module: 'dashboard', section: 'Inicio' },
+  { path: '/sales', icon: ShoppingCart, label: 'Ventas', module: 'sales', section: 'Operación' },
+  { path: '/cash-register', icon: Wallet, label: 'Caja', module: 'cash-register', section: 'Operación' },
+  { path: '/cash-movements', icon: ArrowLeftRight, label: 'Movimientos de Caja', module: 'cash-movements', section: 'Operación' },
+  { path: '/returns', icon: RotateCcw, label: 'Devoluciones', module: 'returns', section: 'Operación' },
+  { path: '/products', icon: Package, label: 'Productos', module: 'products', section: 'Inventario' },
+  { path: '/inventory', icon: Warehouse, label: 'Inventario', module: 'inventory', section: 'Inventario' },
+  { path: '/product-movements', icon: ClipboardList, label: 'Movimientos de Productos', module: 'product-movements', section: 'Inventario' },
+  { path: '/categories', icon: FolderTree, label: 'Categorías', module: 'categories', section: 'Inventario' },
+  { path: '/customers', icon: Users, label: 'Clientes', module: 'customers', section: 'Gestión' },
+  { path: '/suppliers', icon: Truck, label: 'Proveedores', module: 'suppliers', section: 'Gestión' },
+  { path: '/purchases', icon: ShoppingBag, label: 'Compras', module: 'purchases', section: 'Gestión' },
+  { path: '/reports', icon: BarChart3, label: 'Reportes', module: 'reports', section: 'Reportes' },
+  { path: '/alerts', icon: AlertTriangle, label: 'Alertas', module: 'alerts', section: 'Reportes' },
+  { path: '/company-settings', icon: Building2, label: 'Mi Empresa', module: 'company-settings', section: 'Configuración' },
+  { path: '/payment-methods', icon: CreditCard, label: 'Métodos de Pago', module: 'payment-methods', section: 'Configuración' },
+  { path: '/scan-qr', icon: QrCode, label: 'Escanear QR', module: 'scan-qr', section: 'Configuración' },
+  { path: '/users', icon: UserCog, label: 'Usuarios', module: 'users', section: 'Configuración' },
+] as const;
 
 export default function Layout() {
   const { user, logout } = useAuth();
@@ -43,24 +71,6 @@ export default function Layout() {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [showSearch]);
 
-  const allMenuItems = [
-    { path: '/', icon: LayoutDashboard, label: 'Dashboard', module: 'dashboard' },
-    { path: '/products', icon: Package, label: 'Productos', module: 'products' },
-    { path: '/categories', icon: FolderTree, label: 'Categorías', module: 'categories' },
-    { path: '/inventory', icon: Warehouse, label: 'Inventario', module: 'inventory' },
-    { path: '/sales', icon: ShoppingCart, label: 'Ventas', module: 'sales' },
-    { path: '/cash-register', icon: Wallet, label: 'Caja', module: 'cash-register' },
-    { path: '/cash-movements', icon: ArrowLeftRight, label: 'Movimientos de Caja', module: 'cash-movements' },
-    { path: '/alerts', icon: AlertTriangle, label: 'Alertas', module: 'alerts' },
-    { path: '/customers', icon: Users, label: 'Clientes', module: 'customers' },
-    { path: '/reports', icon: BarChart3, label: 'Reportes', module: 'reports' },
-    { path: '/returns', icon: RotateCcw, label: 'Devoluciones', module: 'returns' },
-    { path: '/suppliers', icon: Truck, label: 'Proveedores', module: 'suppliers' },
-    { path: '/purchases', icon: ShoppingBag, label: 'Compras', module: 'purchases' },
-    { path: '/scan-qr', icon: QrCode, label: 'Escanear QR', module: 'scan-qr' },
-    { path: '/users', icon: UserCog, label: 'Usuarios', module: 'users' },
-  ];
-
   const menuItems = user?.role === 'admin'
     ? allMenuItems
     : allMenuItems.filter((item) => {
@@ -69,13 +79,20 @@ export default function Layout() {
         return perms.includes(item.module);
       });
 
+  const groupedMenu = sections
+    .map((section) => ({
+      section,
+      items: menuItems.filter((item) => item.section === section),
+    }))
+    .filter((group) => group.items.length > 0);
+
   return (
     <div className="layout">
       <aside className="sidebar">
         <div className="sidebar-header">
           <h1>Farmacia</h1>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button 
+            <button
               className="global-search-trigger"
               onClick={() => setShowSearch(true)}
               title="Búsqueda global (Ctrl+K)"
@@ -85,20 +102,27 @@ export default function Layout() {
           </div>
         </div>
         <nav className="sidebar-nav">
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path));
-            return (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={`nav-item ${isActive ? 'active' : ''}`}
-              >
-                <Icon size={20} />
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
+          {groupedMenu.map((group) => (
+            <div className="nav-section" key={group.section}>
+              <div className="nav-section-title">{group.section}</div>
+              <div className="nav-section-items">
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path));
+                  return (
+                    <Link
+                      key={item.path}
+                      to={item.path}
+                      className={`nav-item ${isActive ? 'active' : ''}`}
+                    >
+                      <Icon size={20} />
+                      <span>{item.label}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
         <div className="sidebar-footer">
           <div className="user-info">

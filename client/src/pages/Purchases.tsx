@@ -1,14 +1,23 @@
-import { useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { purchasesApi, CreatePurchaseRequest, Purchase } from '../api/purchases';
 import { suppliersApi } from '../api/suppliers';
 import { productsApi } from '../api/products';
 import { cashRegistersApi } from '../api/cashRegisters';
-import { Plus, ShoppingBag, X, Pencil, Trash2 } from 'lucide-react';
+import { paymentMethodsApi } from '../api/paymentMethods';
+import { Download, Filter, Plus, ShoppingBag, X, Pencil, Trash2 } from 'lucide-react';
 import { format } from 'date-fns';
 import './Purchases.css';
 
 type CartItem = { product_id: number; name: string; quantity: number; unit_price: number; cost_price: number };
+
+const getToday = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 export default function Purchases() {
   const [showModal, setShowModal] = useState(false);
@@ -18,27 +27,45 @@ export default function Purchases() {
   const [deletePassword, setDeletePassword] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editCart, setEditCart] = useState<CartItem[]>([]);
+  const [filters, setFilters] = useState({
+    start_date: getToday(),
+    end_date: getToday(),
+  });
   const [purchaseForm, setPurchaseForm] = useState({
     supplier_id: '',
     discount: '',
     tax_amount: '',
     notes: '',
     afecta_caja: false,
+    cash_payment_method: '',
   });
   const [editForm, setEditForm] = useState({ supplier_id: '', discount: '', tax_amount: '', notes: '' });
 
   const queryClient = useQueryClient();
 
-  const { data: purchasesData } = useQuery('purchases', () => purchasesApi.getAll({ limit: 100 }));
+  const { data: purchasesData } = useQuery(['purchases', filters], () => purchasesApi.getAll({ ...filters, limit: 100 }));
   const { data: suppliersData } = useQuery('suppliers', () => suppliersApi.getAll({ limit: 1000 }));
   const { data: productsData } = useQuery('products', () => productsApi.getAll({ limit: 1000 }));
   const { data: currentCaja } = useQuery('cash-register-current', () => cashRegistersApi.getCurrent());
+  const { data: paymentMethods = [] } = useQuery('payment-methods-active', () => paymentMethodsApi.getAll({ active: 1 }));
+
+  useEffect(() => {
+    if (!purchaseForm.afecta_caja || purchaseForm.cash_payment_method || paymentMethods.length === 0) return;
+    setPurchaseForm((current) => ({
+      ...current,
+      cash_payment_method: current.cash_payment_method || paymentMethods[0].value,
+    }));
+  }, [paymentMethods, purchaseForm.afecta_caja, purchaseForm.cash_payment_method]);
 
   const createPurchaseMutation = useMutation(purchasesApi.create, {
     onSuccess: () => {
       queryClient.invalidateQueries('purchases');
       queryClient.invalidateQueries('inventory');
       queryClient.invalidateQueries('products');
+      queryClient.invalidateQueries('cash-register-current');
+      queryClient.invalidateQueries('cash-registers-list');
+      queryClient.invalidateQueries(['cash-register-movements']);
+      queryClient.invalidateQueries('cash-movements');
       setShowModal(false);
       setCart([]);
       resetForm();
@@ -53,6 +80,10 @@ export default function Purchases() {
         queryClient.invalidateQueries('purchases');
         queryClient.invalidateQueries('inventory');
         queryClient.invalidateQueries('products');
+        queryClient.invalidateQueries('cash-register-current');
+        queryClient.invalidateQueries('cash-registers-list');
+        queryClient.invalidateQueries(['cash-register-movements']);
+        queryClient.invalidateQueries('cash-movements');
         setShowEditModal(false);
         setEditingPurchase(null);
       },
@@ -66,6 +97,10 @@ export default function Purchases() {
         queryClient.invalidateQueries('purchases');
         queryClient.invalidateQueries('inventory');
         queryClient.invalidateQueries('products');
+        queryClient.invalidateQueries('cash-register-current');
+        queryClient.invalidateQueries('cash-registers-list');
+        queryClient.invalidateQueries(['cash-register-movements']);
+        queryClient.invalidateQueries('cash-movements');
         setShowDeleteModal(false);
         setEditingPurchase(null);
         setDeletePassword('');
@@ -83,6 +118,7 @@ export default function Purchases() {
       tax_amount: '',
       notes: '',
       afecta_caja: false,
+      cash_payment_method: '',
     });
   };
 
@@ -209,6 +245,10 @@ export default function Purchases() {
       alert('Debes tener una caja abierta para registrar compras que afectan a caja.');
       return;
     }
+    if (purchaseForm.afecta_caja && !purchaseForm.cash_payment_method) {
+      alert('Debes seleccionar el método con el que se afectará la caja.');
+      return;
+    }
 
     const purchaseData: CreatePurchaseRequest = {
       supplier_id: Number(purchaseForm.supplier_id),
@@ -222,12 +262,23 @@ export default function Purchases() {
       tax_amount: Number(purchaseForm.tax_amount) || 0,
       notes: purchaseForm.notes || undefined,
       afecta_caja: purchaseForm.afecta_caja,
+      cash_payment_method: purchaseForm.afecta_caja ? purchaseForm.cash_payment_method : undefined,
     };
 
     createPurchaseMutation.mutate(purchaseData);
   };
 
   const purchases = purchasesData?.purchases || [];
+  const purchasesTotal = purchases.reduce((sum, purchase) => sum + Number(purchase.final_amount || 0), 0);
+  const cashAffectedCount = purchases.filter((purchase) => purchase.afecta_caja).length;
+
+  const handleExportPurchases = async () => {
+    try {
+      await purchasesApi.exportExcel(filters);
+    } catch (error) {
+      alert('No se pudo exportar el reporte de compras.');
+    }
+  };
 
   return (
     <div className="page-container">
@@ -236,10 +287,60 @@ export default function Purchases() {
           <h1>Compras</h1>
           <p>Gestión de compras a proveedores</p>
         </div>
-        <button className="btn-primary" onClick={() => { setCart([]); resetForm(); setShowModal(true); }}>
-          <Plus size={20} />
-          Nueva Compra
-        </button>
+        <div className="header-actions">
+          <button className="btn-secondary" onClick={handleExportPurchases}>
+            <Download size={20} />
+            Exportar Excel
+          </button>
+          <button className="btn-primary" onClick={() => { setCart([]); resetForm(); setShowModal(true); }}>
+            <Plus size={20} />
+            Nueva Compra
+          </button>
+        </div>
+      </div>
+
+      <div className="operation-status-strip purchase-strip">
+        <div className={currentCaja ? 'operation-pill success' : 'operation-pill danger'}>
+          <span>Caja</span>
+          <strong>{currentCaja ? 'Abierta' : 'Cerrada'}</strong>
+        </div>
+        <div className="operation-pill info">
+          <span>Compras</span>
+          <strong>{purchases.length}</strong>
+        </div>
+        <div className="operation-pill accent">
+          <span>Total</span>
+          <strong>S/ {purchasesTotal.toFixed(2)}</strong>
+        </div>
+        <div className="operation-pill neutral">
+          <span>Afectan caja</span>
+          <strong>{cashAffectedCount}</strong>
+        </div>
+      </div>
+
+      <div className="filters-container purchase-filters">
+        <div className="filters-header">
+          <Filter size={20} />
+          <span>Filtros</span>
+        </div>
+        <div className="filters-grid">
+          <div className="form-group">
+            <label>Desde</label>
+            <input
+              type="date"
+              value={filters.start_date}
+              onChange={(e) => setFilters({ ...filters, start_date: e.target.value })}
+            />
+          </div>
+          <div className="form-group">
+            <label>Hasta</label>
+            <input
+              type="date"
+              value={filters.end_date}
+              onChange={(e) => setFilters({ ...filters, end_date: e.target.value })}
+            />
+          </div>
+        </div>
       </div>
 
       <div className="table-container">
@@ -250,6 +351,7 @@ export default function Purchases() {
               <th>Proveedor</th>
               <th>Total</th>
               <th>Afecta Caja</th>
+              <th>Método Caja</th>
               <th>Fecha</th>
               <th>Acciones</th>
             </tr>
@@ -259,8 +361,9 @@ export default function Purchases() {
               <tr key={purchase.id}>
                 <td>{purchase.purchase_number}</td>
                 <td>{purchase.supplier_name}</td>
-                <td>${purchase.final_amount.toFixed(2)}</td>
+                <td>S/ {purchase.final_amount.toFixed(2)}</td>
                 <td>{purchase.afecta_caja ? 'Sí' : 'No'}</td>
+                <td>{purchase.afecta_caja ? (purchase.cash_payment_method_name || purchase.cash_payment_method || '-') : '-'}</td>
                 <td>{format(new Date(purchase.created_at), 'dd/MM/yyyy HH:mm')}</td>
                 <td>
                   <div className="action-buttons">
@@ -292,10 +395,10 @@ export default function Purchases() {
 
       {showModal && (
         <div className="modal-overlay" onClick={() => { setShowModal(false); setCart([]); resetForm(); }}>
-          <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content modal-large purchase-modal" onClick={(e) => e.stopPropagation()}>
             <h2>Nueva Compra</h2>
-            <div className="sale-form-container">
-              <div className="sale-form-left">
+            <div className="purchase-form-container">
+              <div className="purchase-main">
                 <div className="form-group">
                   <label>Proveedor *</label>
                   <select
@@ -326,7 +429,7 @@ export default function Purchases() {
                     {productsData?.products
                       .map((product) => (
                         <option key={product.id} value={product.id}>
-                          {product.name} - ${product.unit_price.toFixed(2)}
+                          {product.name} - S/ {product.unit_price.toFixed(2)}
                         </option>
                       ))}
                   </select>
@@ -373,7 +476,7 @@ export default function Purchases() {
                                   title="Precio de compra configurado en el producto"
                                 />
                               </td>
-                              <td>${subtotal.toFixed(2)}</td>
+                              <td>S/ {subtotal.toFixed(2)}</td>
                               <td>
                                 <button
                                   type="button"
@@ -392,7 +495,7 @@ export default function Purchases() {
                 </div>
               </div>
 
-              <div className="sale-form-right">
+              <div className="purchase-summary-panel">
                 <form onSubmit={handleSubmit}>
                   <div className="form-group">
                     <label>Descuento</label>
@@ -430,7 +533,11 @@ export default function Purchases() {
                       type="checkbox"
                       id="afecta-caja"
                       checked={purchaseForm.afecta_caja}
-                      onChange={(e) => setPurchaseForm({ ...purchaseForm, afecta_caja: e.target.checked })}
+                      onChange={(e) => setPurchaseForm({
+                        ...purchaseForm,
+                        afecta_caja: e.target.checked,
+                        cash_payment_method: e.target.checked ? (purchaseForm.cash_payment_method || paymentMethods[0]?.value || '') : '',
+                      })}
                       disabled={!currentCaja}
                     />
                     <label htmlFor="afecta-caja" style={{ marginBottom: 0 }}>
@@ -441,22 +548,40 @@ export default function Purchases() {
                     <p style={{ color: 'var(--danger)', fontSize: '0.875rem' }}>Debes abrir una caja para que la compra afecte a caja.</p>
                   )}
 
+                  {purchaseForm.afecta_caja && currentCaja && (
+                    <div className="form-group">
+                      <label>Método que afecta caja *</label>
+                      <select
+                        value={purchaseForm.cash_payment_method}
+                        onChange={(e) => setPurchaseForm({ ...purchaseForm, cash_payment_method: e.target.value })}
+                        required
+                      >
+                        <option value="">Seleccionar método...</option>
+                        {paymentMethods.map((method) => (
+                          <option key={method.id} value={method.value}>
+                            {method.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   <div className="sale-totals">
                     <div className="total-row">
                       <span>Subtotal:</span>
-                      <span>${calculateSubtotal().toFixed(2)}</span>
+                      <span>S/ {calculateSubtotal().toFixed(2)}</span>
                     </div>
                     <div className="total-row">
                       <span>Descuento:</span>
-                      <span>-${(Number(purchaseForm.discount) || 0).toFixed(2)}</span>
+                      <span>-S/ {(Number(purchaseForm.discount) || 0).toFixed(2)}</span>
                     </div>
                     <div className="total-row">
                       <span>Impuesto:</span>
-                      <span>+${(Number(purchaseForm.tax_amount) || 0).toFixed(2)}</span>
+                      <span>+S/ {(Number(purchaseForm.tax_amount) || 0).toFixed(2)}</span>
                     </div>
                     <div className="total-row total-final">
                       <span>Total:</span>
-                      <span>${calculateTotal().toFixed(2)}</span>
+                      <span>S/ {calculateTotal().toFixed(2)}</span>
                     </div>
                   </div>
 
@@ -478,10 +603,10 @@ export default function Purchases() {
 
       {showEditModal && editingPurchase && (
         <div className="modal-overlay" onClick={() => { setShowEditModal(false); setEditingPurchase(null); }}>
-          <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content modal-large purchase-modal" onClick={(e) => e.stopPropagation()}>
             <h2>Editar Compra {editingPurchase.purchase_number}</h2>
-            <div className="sale-form-container">
-              <div className="sale-form-left">
+            <div className="purchase-form-container">
+              <div className="purchase-main">
                 <div className="form-group">
                   <label>Proveedor *</label>
                   <select
@@ -498,7 +623,7 @@ export default function Purchases() {
                   <select onChange={(e) => { if (e.target.value) { addToEditCart(Number(e.target.value)); e.target.value = ''; } }}>
                     <option value="">Seleccionar producto...</option>
                     {productsData?.products.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} - ${(p.unit_price || 0).toFixed(2)}</option>
+                      <option key={p.id} value={p.id}>{p.name} - S/ {(p.unit_price || 0).toFixed(2)}</option>
                     ))}
                   </select>
                 </div>
@@ -518,8 +643,8 @@ export default function Purchases() {
                             <td>
                               <input type="number" min="1" value={item.quantity} onChange={(e) => updateEditCartItem(item.product_id, Number(e.target.value))} style={{ width: '60px' }} />
                             </td>
-                            <td>${item.cost_price.toFixed(2)}</td>
-                            <td>${(item.cost_price * item.quantity).toFixed(2)}</td>
+                            <td>S/ {item.cost_price.toFixed(2)}</td>
+                            <td>S/ {(item.cost_price * item.quantity).toFixed(2)}</td>
                             <td><button type="button" onClick={() => removeFromEditCart(item.product_id)} className="btn-icon btn-danger"><X size={16} /></button></td>
                           </tr>
                         ))}
@@ -528,7 +653,7 @@ export default function Purchases() {
                   )}
                 </div>
               </div>
-              <div className="sale-form-right">
+              <div className="purchase-summary-panel">
                 <div className="form-group">
                   <label>Descuento</label>
                   <input type="number" step="0.01" min="0" value={editForm.discount} onChange={(e) => setEditForm({ ...editForm, discount: e.target.value })} />
@@ -544,7 +669,7 @@ export default function Purchases() {
                 <div className="sale-totals">
                   <div className="total-row total-final">
                     <span>Total:</span>
-                    <span>${calcEditTotal().toFixed(2)}</span>
+                    <span>S/ {calcEditTotal().toFixed(2)}</span>
                   </div>
                 </div>
                 <div className="modal-actions">

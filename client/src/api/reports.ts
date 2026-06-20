@@ -55,6 +55,68 @@ export interface CustomerReport {
   last_purchase_date?: string;
 }
 
+export interface ProductsSoldByUserReport {
+  items: Array<{
+    accounting_date?: string;
+    sale_date: string;
+    created_at: string;
+    sale_number: string;
+    user_id: number;
+    user_name: string;
+    product_id: number;
+    product_name: string;
+    barcode?: string;
+    quantity: number;
+    unit_price: number;
+    discount: number;
+    subtotal: number;
+    sales_bonus_per_unit: number;
+    sales_bonus_total: number;
+  }>;
+  summary: Array<{
+    user_id: number;
+    user_name: string;
+    total_quantity: number;
+    total_sales_amount: number;
+    total_bonus: number;
+  }>;
+}
+
+export interface ProfitReport {
+  summary: {
+    total_sales_amount: number;
+    total_cost: number;
+    gross_profit: number;
+    margin_percent: number;
+    total_quantity: number;
+    total_lines: number;
+    estimated_cost_lines: number;
+    missing_cost_lines: number;
+  };
+  items: Array<{
+    accounting_date?: string;
+    sale_date: string;
+    created_at: string;
+    sale_number: string;
+    user_name: string;
+    product_id: number;
+    product_name: string;
+    barcode?: string;
+    sold_quantity: number;
+    returned_quantity: number;
+    net_quantity: number;
+    unit_price: number;
+    discount: number;
+    gross_subtotal: number;
+    net_sales_amount: number;
+    cost_price: number;
+    total_cost: number;
+    gross_profit: number;
+    margin_percent: number;
+    cost_source: 'historical' | 'current' | 'missing';
+  }>;
+}
+
 export const reportsApi = {
   getSalesReport: async (filters?: {
     start_date?: string;
@@ -80,6 +142,23 @@ export const reportsApi = {
 
   getCustomerReport: async (limit?: number): Promise<CustomerReport[]> => {
     const response = await api.get<CustomerReport[]>('/reports/customers', { params: { limit } });
+    return response.data;
+  },
+
+  getProductsSoldByUser: async (filters?: {
+    start_date?: string;
+    end_date?: string;
+    user_id?: number;
+  }): Promise<ProductsSoldByUserReport> => {
+    const response = await api.get<ProductsSoldByUserReport>('/reports/products-sold-by-user', { params: filters });
+    return response.data;
+  },
+
+  getProfitReport: async (filters?: {
+    start_date?: string;
+    end_date?: string;
+  }): Promise<ProfitReport> => {
+    const response = await api.get<ProfitReport>('/reports/profit', { params: filters });
     return response.data;
   },
 };

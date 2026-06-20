@@ -23,9 +23,10 @@ router.get('/stats', authenticateToken, [
 
   // Get sales for the day
   db.all(
-    `SELECT s.*, c.name as customer_name, u.username as user_name
+    `SELECT s.*, COALESCE(pm.name, s.payment_method) as payment_method_name, c.name as customer_name, u.username as user_name
      FROM sales s
      LEFT JOIN customers c ON s.customer_id = c.id
+     LEFT JOIN payment_methods pm ON pm.value = s.payment_method
      INNER JOIN users u ON s.user_id = u.id
      WHERE DATE(s.created_at) = ?
      ${isAdmin ? '' : 'AND s.user_id = ?'}`,

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { cashRegistersApi, CashRegister, CloseCashRegisterResponse } from '../api/cashRegisters';
+import { cashRegistersApi, CashMovement, CashRegister, CloseCashRegisterResponse } from '../api/cashRegisters';
 import { salesApi, Sale } from '../api/sales';
+import { paymentMethodsApi } from '../api/paymentMethods';
 import { useAuth } from '../hooks/useAuth';
 import { FileText } from 'lucide-react';
 import './Sales.css';
@@ -48,6 +49,17 @@ export default function CashRegisterPage() {
     { enabled: !!currentCashRegister?.id }
   );
 
+  const { data: currentCashMovements = [] } = useQuery<CashMovement[]>(
+    ['cash-register-movements', currentCashRegister?.id],
+    async () => {
+      if (!currentCashRegister?.id) return [];
+      return cashRegistersApi.getMovements({ cash_register_id: currentCashRegister.id });
+    },
+    { enabled: !!currentCashRegister?.id }
+  );
+
+  const { data: paymentMethods = [] } = useQuery('payment-methods', () => paymentMethodsApi.getAll());
+
   const resetCashForm = () => {
     setCashForm({
       opening_balance: '',
@@ -74,6 +86,8 @@ export default function CashRegisterPage() {
     onSuccess: (data) => {
       setCloseSummary(data);
       queryClient.invalidateQueries('cash-register-current');
+      queryClient.invalidateQueries('cash-registers-list');
+      queryClient.invalidateQueries(['cash-register-movements']);
       queryClient.invalidateQueries('sales');
       queryClient.invalidateQueries(['cash-movements-sales']);
     },
@@ -101,15 +115,21 @@ export default function CashRegisterPage() {
   });
 
   const calculateExpectedBalance = () => {
-    if (!currentCashRegister || !currentCashSales?.sales) return 0;
+    if (!currentCashRegister) return 0;
 
-    const cashSales = currentCashSales.sales.filter(
-      (s: Sale) => s.payment_method === 'cash' && s.status !== 'returned'
-    );
+    const cashMethodValues = new Set(paymentMethods.filter((method) => method.is_cash === 1).map((method) => method.value));
+    const cashSales = (currentCashSales?.sales || []).filter((s: Sale) => {
+      const isCash = cashMethodValues.size > 0 ? cashMethodValues.has(s.payment_method) : s.payment_method === 'cash';
+      return isCash && s.status !== 'returned';
+    });
 
     const totalCashSales = cashSales.reduce((sum: number, s: Sale) => sum + (s.final_amount || 0), 0);
-    return currentCashRegister.opening_balance + totalCashSales;
+    const cashMovementsTotal = currentCashMovements.reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
+
+    return currentCashRegister.opening_balance + totalCashSales + cashMovementsTotal;
   };
+
+  const cashMovementsTotal = currentCashMovements.reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
 
   const expectedBalance = calculateExpectedBalance();
 
@@ -295,6 +315,12 @@ export default function CashRegisterPage() {
                     </span>
                   </div>
                   <div>
+                    <span className="label">Movimientos de caja</span>
+                    <span className="value">
+                      S/ {(closeSummary.summary.cash_movements_amount || 0).toFixed(2)}
+                    </span>
+                  </div>
+                  <div>
                     <span className="label">Saldo de cierre</span>
                     <span className="value">
                       {closeSummary.summary.closing_balance !== null
@@ -340,7 +366,8 @@ export default function CashRegisterPage() {
                   </span>
                 </div>
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                  Saldo inicial (S/ {currentCashRegister.opening_balance.toFixed(2)}) + Ventas en efectivo
+                  Saldo inicial (S/ {currentCashRegister.opening_balance.toFixed(2)}) + ventas en efectivo + movimientos de caja
+                  {cashMovementsTotal !== 0 ? ` (S/ ${cashMovementsTotal.toFixed(2)})` : ''}
                 </p>
 
                 <div className="form-row">
@@ -446,8 +473,8 @@ export default function CashRegisterPage() {
                 <tbody>
                   {closedCashRegisters.length > 0 ? (
                     closedCashRegisters.map((cr) => {
-                      const cashAmount = Number(cr.cash_amount || 0);
-                      const expected = Number(cr.opening_balance || 0) + cashAmount;
+                      const expectedCashAmount = cr.expected_cash_amount ?? Number(cr.cash_amount || 0) + Number(cr.cash_movements_amount || 0);
+                      const expected = Number(cr.opening_balance || 0) + Number(expectedCashAmount || 0);
                       const delivered = cr.closing_balance === null || cr.closing_balance === undefined
                         ? null
                         : Number(cr.closing_balance);

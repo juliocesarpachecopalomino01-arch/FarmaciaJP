@@ -276,7 +276,10 @@ export default function Customers() {
                         <td>{sale.sale_number}</td>
                         <td>{new Date(sale.created_at).toLocaleString('es-ES')}</td>
                         <td>${sale.final_amount.toFixed(2)}</td>
-                        <td>{sale.payment_method}</td>
+                        <td>
+                          {sale.payment_method_name || sale.payment_method}
+                          {sale.payment_reference ? ` (${sale.payment_reference})` : ''}
+                        </td>
                         <td>
                           <button
                             onClick={() => {

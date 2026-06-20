@@ -21,8 +21,8 @@ export const db = new sqlite3.Database(DB_PATH, (err) => {
   if (err) {
     console.error('Error opening database:', err);
   } else {
-    console.log('✅ Connected to SQLite database');
-    console.log(`📁 SQLite path: ${DB_PATH}`);
+    console.log('Connected to SQLite database');
+    console.log(`SQLite path: ${DB_PATH}`);
   }
 });
 
@@ -53,9 +53,50 @@ export function initializeDatabase(): Promise<void> {
           password TEXT NOT NULL,
           full_name TEXT NOT NULL,
           role TEXT NOT NULL DEFAULT 'employee',
+          worker_id INTEGER,
+          profile_id INTEGER,
           is_active INTEGER DEFAULT 1,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      db.run(`
+        CREATE TABLE IF NOT EXISTS workers (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          document_type TEXT DEFAULT 'DNI',
+          document_number TEXT UNIQUE,
+          full_name TEXT NOT NULL,
+          email TEXT,
+          phone TEXT,
+          address TEXT,
+          position TEXT,
+          hire_date DATE,
+          is_active INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      db.run(`
+        CREATE TABLE IF NOT EXISTS user_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT,
+          role TEXT NOT NULL DEFAULT 'employee',
+          is_active INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      db.run(`
+        CREATE TABLE IF NOT EXISTS profile_module_permissions (
+          profile_id INTEGER NOT NULL,
+          module_key TEXT NOT NULL,
+          can_access INTEGER DEFAULT 1,
+          PRIMARY KEY (profile_id, module_key),
+          FOREIGN KEY (profile_id) REFERENCES user_profiles(id)
         )
       `);
 
@@ -70,6 +111,46 @@ export function initializeDatabase(): Promise<void> {
         )
       `);
 
+      // Payment methods table
+      db.run(`
+        CREATE TABLE IF NOT EXISTS payment_methods (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          value TEXT NOT NULL UNIQUE,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT,
+          is_cash INTEGER DEFAULT 0,
+          requires_reference INTEGER DEFAULT 0,
+          reference_required INTEGER DEFAULT 0,
+          reference_label TEXT DEFAULT 'Código / Referencia',
+          is_active INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // Company and receipt settings (single-row configuration)
+      db.run(`
+        CREATE TABLE IF NOT EXISTS company_settings (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          business_name TEXT DEFAULT 'FARMACIA',
+          trade_name TEXT DEFAULT 'Sistema de Farmacia',
+          tax_id TEXT,
+          address TEXT,
+          phone TEXT,
+          email TEXT,
+          website TEXT,
+          logo_data_url TEXT,
+          receipt_title TEXT DEFAULT 'COMPROBANTE DE VENTA',
+          receipt_footer TEXT DEFAULT 'Gracias por su compra',
+          receipt_width_mm INTEGER DEFAULT 80,
+          show_logo INTEGER DEFAULT 1,
+          show_qr INTEGER DEFAULT 1,
+          cash_reopen_password TEXT DEFAULT 'admin123',
+          return_password TEXT DEFAULT 'd3v0luc10n$2026$*',
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
       // Products table
       db.run(`
         CREATE TABLE IF NOT EXISTS products (
@@ -80,6 +161,8 @@ export function initializeDatabase(): Promise<void> {
           category_id INTEGER,
           unit_price REAL NOT NULL,
           cost_price REAL,
+          has_sales_bonus INTEGER DEFAULT 0,
+          sales_bonus_per_unit REAL DEFAULT 0,
           requires_prescription INTEGER DEFAULT 0,
           expiration_date DATE,
           is_active INTEGER DEFAULT 1,
@@ -191,8 +274,11 @@ export function initializeDatabase(): Promise<void> {
           tax_amount REAL DEFAULT 0,
           final_amount REAL NOT NULL,
           payment_method TEXT NOT NULL,
+          payment_reference TEXT,
           status TEXT DEFAULT 'completed',
           notes TEXT,
+          afecta_caja INTEGER DEFAULT 0,
+          cash_payment_method TEXT,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (customer_id) REFERENCES customers(id),
           FOREIGN KEY (user_id) REFERENCES users(id),
@@ -208,7 +294,10 @@ export function initializeDatabase(): Promise<void> {
           product_id INTEGER NOT NULL,
           quantity INTEGER NOT NULL,
           unit_price REAL NOT NULL,
+          cost_price REAL,
           discount REAL DEFAULT 0,
+          sales_bonus_per_unit REAL DEFAULT 0,
+          sales_bonus_total REAL DEFAULT 0,
           subtotal REAL NOT NULL,
           FOREIGN KEY (sale_id) REFERENCES sales(id),
           FOREIGN KEY (product_id) REFERENCES products(id)
@@ -316,7 +405,20 @@ export function initializeDatabase(): Promise<void> {
                 if (alterErr) {
                   console.error('Error adding cash_register_id column to sales table:', alterErr);
                 } else {
-                  console.log('✅ Column cash_register_id added to sales table');
+                  console.log('Column cash_register_id added to sales table');
+                }
+              }
+            );
+          }
+          const hasPaymentReference = columns.some((col) => col.name === 'payment_reference');
+          if (!hasPaymentReference) {
+            db.run(
+              'ALTER TABLE sales ADD COLUMN payment_reference TEXT',
+              (alterErr) => {
+                if (alterErr) {
+                  console.error('Error adding payment_reference column to sales table:', alterErr);
+                } else {
+                  console.log('Column payment_reference added to sales table');
                 }
               }
             );
@@ -324,24 +426,204 @@ export function initializeDatabase(): Promise<void> {
         }
       });
 
-      // Ensure expiration_date column exists in products table for existing databases
+      db.all('PRAGMA table_info(payment_methods)', (err, columns: any[]) => {
+        if (err) {
+          console.error('Error checking payment_methods table structure:', err);
+          return;
+        }
+
+        const colNames = (columns || []).map((c) => c.name);
+        const addColumn = (name: string, type: string) => {
+          if (colNames.includes(name)) return;
+          db.run(`ALTER TABLE payment_methods ADD COLUMN ${name} ${type}`, (alterErr) => {
+            if (alterErr) {
+              console.error(`Error adding ${name} to payment_methods:`, alterErr);
+            } else {
+              console.log(`Column ${name} added to payment_methods`);
+            }
+          });
+        };
+
+        addColumn('requires_reference', 'INTEGER DEFAULT 0');
+        addColumn('reference_required', 'INTEGER DEFAULT 0');
+        addColumn('reference_label', "TEXT DEFAULT 'Código / Referencia'");
+
+        db.run(`
+          INSERT OR IGNORE INTO payment_methods (value, name, description, is_cash, is_active)
+          VALUES
+            ('cash', 'Efectivo', 'Pago en dinero en efectivo', 1, 1),
+            ('card', 'Tarjeta', 'Pago con tarjeta', 0, 1),
+            ('transfer', 'Transferencia', 'Pago por transferencia bancaria', 0, 1),
+            ('check', 'Cheque', 'Pago con cheque', 0, 1)
+        `);
+        db.run(
+          `UPDATE payment_methods
+           SET requires_reference = 1, reference_required = 0, reference_label = 'Voucher / operación'
+           WHERE value = 'card' AND COALESCE(requires_reference, 0) = 0`
+        );
+        db.run(
+          `UPDATE payment_methods
+           SET requires_reference = 1, reference_required = 1, reference_label = 'N° de operación'
+           WHERE value = 'transfer' AND COALESCE(requires_reference, 0) = 0`
+        );
+        db.run(
+          `UPDATE payment_methods
+           SET requires_reference = 1, reference_required = 0, reference_label = 'N° de cheque'
+           WHERE value = 'check' AND COALESCE(requires_reference, 0) = 0`
+        );
+      });
+
+      db.all('PRAGMA table_info(users)', (err, columns: any[]) => {
+        if (err) {
+          console.error('Error checking users table structure:', err);
+          return;
+        }
+
+        const seedUserAccessData = () => {
+          db.run(`
+            INSERT OR IGNORE INTO user_profiles (id, name, description, role, is_active)
+            VALUES
+              (1, 'Administrador', 'Acceso completo al sistema', 'admin', 1),
+              (2, 'Vendedor', 'Operación de ventas, caja y consultas principales', 'employee', 1)
+          `);
+
+          const profileStmt = db.prepare(
+            'INSERT OR IGNORE INTO profile_module_permissions (profile_id, module_key, can_access) VALUES (?, ?, ?)'
+          );
+          const modules = [
+            'dashboard', 'products', 'categories', 'payment-methods', 'company-settings', 'inventory',
+            'sales', 'cash-register', 'cash-movements', 'product-movements', 'alerts', 'customers',
+            'reports', 'returns', 'suppliers', 'purchases', 'users', 'scan-qr',
+          ];
+          modules.forEach((moduleKey) => {
+            profileStmt.run(1, moduleKey, 1);
+            profileStmt.run(2, moduleKey, moduleKey === 'users' || moduleKey === 'company-settings' ? 0 : 1);
+          });
+          profileStmt.finalize();
+
+          db.run(`
+            INSERT OR IGNORE INTO workers (document_number, full_name, email, position, is_active)
+            SELECT 'USER-' || id, full_name, email, CASE WHEN role = 'admin' THEN 'Administrador' ELSE 'Trabajador' END, is_active
+            FROM users
+            WHERE worker_id IS NULL
+          `);
+          db.run(`
+            UPDATE users
+            SET worker_id = (
+              SELECT w.id FROM workers w WHERE w.document_number = 'USER-' || users.id LIMIT 1
+            )
+            WHERE worker_id IS NULL
+          `);
+          db.run(`
+            UPDATE users
+            SET profile_id = CASE WHEN role = 'admin' THEN 1 ELSE 2 END
+            WHERE profile_id IS NULL
+          `);
+        };
+
+        const colNames = (columns || []).map((c) => c.name);
+        const pendingColumns = [
+          ['worker_id', 'INTEGER'],
+          ['profile_id', 'INTEGER'],
+        ].filter(([name]) => !colNames.includes(name));
+
+        const addNextColumn = () => {
+          const next = pendingColumns.shift();
+          if (!next) {
+            seedUserAccessData();
+            return;
+          }
+          const [name, type] = next;
+          db.run(`ALTER TABLE users ADD COLUMN ${name} ${type}`, (alterErr) => {
+            if (alterErr) {
+              console.error(`Error adding ${name} to users:`, alterErr);
+            } else {
+              console.log(`Column ${name} added to users`);
+            }
+            addNextColumn();
+          });
+        };
+
+        addNextColumn();
+      });
+
+      db.all('PRAGMA table_info(company_settings)', (err, columns: any[]) => {
+        if (err) {
+          console.error('Error checking company_settings table structure:', err);
+          return;
+        }
+
+        const colNames = (columns || []).map((c) => c.name);
+        const addColumn = (name: string, type: string) => {
+          if (colNames.includes(name)) return;
+          db.run(`ALTER TABLE company_settings ADD COLUMN ${name} ${type}`, (alterErr) => {
+            if (alterErr) {
+              console.error(`Error adding ${name} to company_settings:`, alterErr);
+            } else {
+              console.log(`Column ${name} added to company_settings`);
+            }
+          });
+        };
+
+        addColumn('business_name', "TEXT DEFAULT 'FARMACIA'");
+        addColumn('trade_name', "TEXT DEFAULT 'Sistema de Farmacia'");
+        addColumn('tax_id', 'TEXT');
+        addColumn('address', 'TEXT');
+        addColumn('phone', 'TEXT');
+        addColumn('email', 'TEXT');
+        addColumn('website', 'TEXT');
+        addColumn('logo_data_url', 'TEXT');
+        addColumn('receipt_title', "TEXT DEFAULT 'COMPROBANTE DE VENTA'");
+        addColumn('receipt_footer', "TEXT DEFAULT 'Gracias por su compra'");
+        addColumn('receipt_width_mm', 'INTEGER DEFAULT 80');
+        addColumn('show_logo', 'INTEGER DEFAULT 1');
+        addColumn('show_qr', 'INTEGER DEFAULT 1');
+        addColumn('cash_reopen_password', "TEXT DEFAULT 'admin123'");
+        addColumn('return_password', "TEXT DEFAULT 'd3v0luc10n$2026$*'");
+      });
+
+      // Ensure product bonus/expiration columns exist in products table for existing databases
       db.all('PRAGMA table_info(products)', (err, columns: any[]) => {
         if (err) {
           console.error('Error checking products table structure:', err);
         } else {
-          const hasExpirationDate = (columns || []).some((col) => col.name === 'expiration_date');
-          if (!hasExpirationDate) {
-            db.run(
-              'ALTER TABLE products ADD COLUMN expiration_date DATE',
-              (alterErr) => {
-                if (alterErr) {
-                  console.error('Error adding expiration_date column to products table:', alterErr);
-                } else {
-                  console.log('✅ Column expiration_date added to products table');
-                }
+          const colNames = (columns || []).map((col) => col.name);
+          const addColumn = (name: string, type: string) => {
+            if (colNames.includes(name)) return;
+            db.run(`ALTER TABLE products ADD COLUMN ${name} ${type}`, (alterErr) => {
+              if (alterErr) {
+                console.error(`Error adding ${name} column to products table:`, alterErr);
+              } else {
+                console.log(`Column ${name} added to products table`);
               }
-            );
-          }
+            });
+          };
+
+          addColumn('expiration_date', 'DATE');
+          addColumn('has_sales_bonus', 'INTEGER DEFAULT 0');
+          addColumn('sales_bonus_per_unit', 'REAL DEFAULT 0');
+        }
+      });
+
+      db.all('PRAGMA table_info(sale_items)', (err, columns: any[]) => {
+        if (err) {
+          console.error('Error checking sale_items table structure:', err);
+        } else {
+          const colNames = (columns || []).map((col) => col.name);
+          const addColumn = (name: string, type: string) => {
+            if (colNames.includes(name)) return;
+            db.run(`ALTER TABLE sale_items ADD COLUMN ${name} ${type}`, (alterErr) => {
+              if (alterErr) {
+                console.error(`Error adding ${name} column to sale_items table:`, alterErr);
+              } else {
+                console.log(`Column ${name} added to sale_items table`);
+              }
+            });
+          };
+
+          addColumn('sales_bonus_per_unit', 'REAL DEFAULT 0');
+          addColumn('sales_bonus_total', 'REAL DEFAULT 0');
+          addColumn('cost_price', 'REAL');
         }
       });
 
@@ -359,7 +641,7 @@ export function initializeDatabase(): Promise<void> {
             if (alterErr) {
               console.error(`Error adding ${name} to cash_registers:`, alterErr);
             } else {
-              console.log(`✅ Column ${name} added to cash_registers`);
+              console.log(`Column ${name} added to cash_registers`);
             }
           });
         };
@@ -382,7 +664,7 @@ export function initializeDatabase(): Promise<void> {
               if (alterErr) {
                 console.error('Error adding cash_register_id column to returns table:', alterErr);
               } else {
-                console.log('✅ Column cash_register_id added to returns table');
+                console.log('Column cash_register_id added to returns table');
               }
             });
           }
@@ -396,6 +678,7 @@ export function initializeDatabase(): Promise<void> {
           cash_register_id INTEGER NOT NULL,
           movement_type TEXT NOT NULL,
           amount REAL NOT NULL,
+          payment_method TEXT,
           reference_type TEXT,
           reference_id INTEGER,
           description TEXT,
@@ -405,6 +688,26 @@ export function initializeDatabase(): Promise<void> {
           FOREIGN KEY (user_id) REFERENCES users(id)
         )
       `);
+
+      db.all('PRAGMA table_info(cash_movements)', (err, columns: any[]) => {
+        if (err) {
+          console.error('Error checking cash_movements table structure:', err);
+          return;
+        }
+        const colNames = (columns || []).map((c) => c.name);
+        if (!colNames.includes('payment_method')) {
+          db.run('ALTER TABLE cash_movements ADD COLUMN payment_method TEXT', (alterErr) => {
+            if (alterErr) {
+              console.error('Error adding payment_method to cash_movements:', alterErr);
+            } else {
+              console.log('Column payment_method added to cash_movements');
+              db.run("UPDATE cash_movements SET payment_method = 'cash' WHERE payment_method IS NULL");
+            }
+          });
+        } else {
+          db.run("UPDATE cash_movements SET payment_method = 'cash' WHERE payment_method IS NULL");
+        }
+      });
 
       // User module permissions (per-module access for employees)
       db.run(`
@@ -429,14 +732,52 @@ export function initializeDatabase(): Promise<void> {
         if (!colNames.includes('cash_register_id')) {
           db.run('ALTER TABLE purchases ADD COLUMN cash_register_id INTEGER', (alterErr) => {
             if (alterErr) console.error('Error adding cash_register_id to purchases:', alterErr);
-            else console.log('✅ Column cash_register_id added to purchases');
+            else console.log('Column cash_register_id added to purchases');
           });
         }
         if (!colNames.includes('afecta_caja')) {
           db.run('ALTER TABLE purchases ADD COLUMN afecta_caja INTEGER DEFAULT 0', (alterErr) => {
             if (alterErr) console.error('Error adding afecta_caja to purchases:', alterErr);
-            else console.log('✅ Column afecta_caja added to purchases');
+            else console.log('Column afecta_caja added to purchases');
           });
+        }
+        if (!colNames.includes('cash_payment_method')) {
+          db.run('ALTER TABLE purchases ADD COLUMN cash_payment_method TEXT', (alterErr) => {
+            if (alterErr) console.error('Error adding cash_payment_method to purchases:', alterErr);
+            else console.log('Column cash_payment_method added to purchases');
+          });
+        }
+
+        if (colNames.includes('cash_register_id') && colNames.includes('afecta_caja')) {
+          const paymentMethodExpression = colNames.includes('cash_payment_method')
+            ? "COALESCE(p.cash_payment_method, 'cash')"
+            : "'cash'";
+          db.run(
+            `INSERT INTO cash_movements (cash_register_id, movement_type, amount, payment_method, reference_type, reference_id, description, user_id)
+             SELECT
+               p.cash_register_id,
+               'purchase',
+               -p.final_amount,
+               ${paymentMethodExpression},
+               'purchase',
+               p.id,
+               'Compra ' || p.purchase_number,
+               p.user_id
+             FROM purchases p
+             WHERE COALESCE(p.afecta_caja, 0) = 1
+               AND p.cash_register_id IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM cash_movements cm
+                 WHERE cm.reference_type = 'purchase'
+                   AND cm.reference_id = p.id
+               )`,
+            (backfillErr) => {
+              if (backfillErr) {
+                console.error('Error backfilling purchase cash movements:', backfillErr);
+              }
+            }
+          );
         }
       });
 
@@ -448,13 +789,41 @@ export function initializeDatabase(): Promise<void> {
         if (err) {
           console.error('Error creating default admin:', err);
         } else {
-          console.log('✅ Default admin user created (username: admin, password: admin123)');
+          console.log('Default admin user created (username: admin, password: admin123)');
+          db.all('PRAGMA table_info(users)', (userInfoErr, userColumns: any[]) => {
+            if (userInfoErr) return;
+            const userColNames = (userColumns || []).map((column) => column.name);
+            if (!userColNames.includes('worker_id') || !userColNames.includes('profile_id')) return;
+            db.run(`
+              INSERT OR IGNORE INTO workers (document_number, full_name, email, position, is_active)
+              SELECT 'USER-' || id, full_name, email, 'Administrador', is_active
+              FROM users
+              WHERE username = 'admin'
+            `);
+            db.run(`
+              UPDATE users
+              SET worker_id = (
+                SELECT w.id FROM workers w WHERE w.document_number = 'USER-' || users.id LIMIT 1
+              ),
+              profile_id = 1
+              WHERE username = 'admin' AND (worker_id IS NULL OR profile_id IS NULL)
+            `);
+          });
         }
       });
 
       // Categories are now created dynamically through the system, not automatically
 
+      db.run(`
+        INSERT OR IGNORE INTO company_settings (
+          id, business_name, trade_name, receipt_title, receipt_footer, receipt_width_mm, show_logo, show_qr
+        )
+        VALUES (1, 'FARMACIA', 'Sistema de Farmacia', 'COMPROBANTE DE VENTA', 'Gracias por su compra', 80, 1, 1)
+      `);
+
       resolve();
     });
   });
 }
+
+

@@ -74,6 +74,24 @@
   overflow-x: hidden;
 }
 
+.nav-section {
+  margin-bottom: 0.85rem;
+}
+
+.nav-section-title {
+  padding: 0.35rem 0.75rem 0.25rem;
+  color: var(--text-light);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.nav-section-items {
+  display: grid;
+  gap: 0.1rem;
+}
+
 .nav-item {
   display: flex;
   align-items: center;

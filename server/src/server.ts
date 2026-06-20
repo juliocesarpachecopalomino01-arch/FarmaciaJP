@@ -23,6 +23,8 @@ import purchasesRoutes from './routes/purchases';
 import lotsRoutes from './routes/lots';
 import dashboardRoutes from './routes/dashboard';
 import cashRegisterRoutes from './routes/cash-registers';
+import paymentMethodRoutes from './routes/payment-methods';
+import companySettingsRoutes from './routes/company-settings';
 
 dotenv.config();
 
@@ -55,6 +57,8 @@ app.use('/api/purchases', purchasesRoutes);
 app.use('/api/lots', lotsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/cash-registers', cashRegisterRoutes);
+app.use('/api/payment-methods', paymentMethodRoutes);
+app.use('/api/company-settings', companySettingsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

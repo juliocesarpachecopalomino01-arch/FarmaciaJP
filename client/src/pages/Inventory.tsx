@@ -1,24 +1,61 @@
-import { useState } from 'react';
+﻿import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { inventoryApi, InventoryItem } from '../api/inventory';
 import { productsApi } from '../api/products';
-import { Plus, Package, Edit, Upload, Download } from 'lucide-react';
+import { categoriesApi } from '../api/categories';
+import { buildApiUrl } from '../api/client';
+import { printInventoryAdjustmentReceipt, printInventoryInitialLoadReceipt } from '../utils/printReceipt';
+import { Plus, Package, Edit, Upload, Download, Filter, Search, Boxes, AlertTriangle, TrendingUp, Wallet } from 'lucide-react';
 import './Inventory.css';
+
+function exportInventoryExcel(filters: { search: string; category: string; status: string }) {
+  const token = localStorage.getItem('token');
+  const params = new URLSearchParams();
+  if (filters.search) params.set('search', filters.search);
+  if (filters.category) params.set('category', filters.category);
+  if (filters.status) params.set('status', filters.status);
+
+  fetch(buildApiUrl(`/export/inventory/excel?${params.toString()}`), {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+    .then((response) => {
+      if (!response.ok) throw new Error('Error al exportar inventario');
+      return response.blob();
+    })
+    .then((blob) => {
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'inventario.xlsx';
+      document.body.appendChild(link);
+      link.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(link);
+    })
+    .catch((error) => {
+      console.error(error);
+      alert('No se pudo exportar el Excel de inventario');
+    });
+}
 
 export default function Inventory() {
   const [showMovementModal, setShowMovementModal] = useState(false);
   const [showStockModal, setShowStockModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
+  const [filters, setFilters] = useState({
+    search: '',
+    category: '',
+    status: '',
+  });
   const [movementForm, setMovementForm] = useState({
     product_id: '',
-    movement_type: 'entry' as 'entry' | 'exit' | 'adjustment',
+    movement_type: 'adjustment' as 'adjustment',
     quantity: '',
     reference_number: '',
     notes: '',
   });
   const [stockForm, setStockForm] = useState({
-    quantity: '',
     min_stock: '',
     max_stock: '',
     location: '',
@@ -28,13 +65,24 @@ export default function Inventory() {
 
   const { data: inventory } = useQuery('inventory', () => inventoryApi.getAll());
   const { data: productsData } = useQuery('products', () => productsApi.getAll({ limit: 1000 }));
+  const { data: categories } = useQuery('categories', () => categoriesApi.getAll());
 
   const movementMutation = useMutation(inventoryApi.addMovement, {
-    onSuccess: () => {
+    onSuccess: async (data) => {
       queryClient.invalidateQueries('inventory');
       queryClient.invalidateQueries('products');
       setShowMovementModal(false);
       resetMovementForm();
+      try {
+        await printInventoryAdjustmentReceipt(data.id);
+      } catch (error) {
+        console.error('Error al imprimir comprobante de ajuste:', error);
+        alert('El ajuste se registró, pero no se pudo imprimir el comprobante');
+      }
+    },
+    onError: (error: any) => {
+      const message = error?.response?.data?.errors?.[0]?.msg || error?.response?.data?.error || 'Error al registrar el ajuste';
+      alert(message);
     },
   });
 
@@ -51,11 +99,19 @@ export default function Inventory() {
   );
 
   const importMutation = useMutation(inventoryApi.import, {
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       queryClient.invalidateQueries('inventory');
       queryClient.invalidateQueries('products');
       setShowImportModal(false);
-      alert(`Importación completada:\n- ${data.success} registros importados\n- ${data.skipped} registros omitidos\n- ${data.errors.length} errores`);
+      alert(`Importación completada:\n- ${data.success} registros importados\n- ${data.skipped} registros omitidos\n- ${data.errors.length} errores\n- Comprobante: ${data.reference_number || '-'}`);
+      if (data.reference_number && data.success > 0) {
+        try {
+          await printInventoryInitialLoadReceipt(data.reference_number);
+        } catch (error) {
+          console.error('Error al imprimir comprobante de carga inicial:', error);
+          alert('La carga se registró, pero no se pudo imprimir el comprobante');
+        }
+      }
     },
     onError: (error: any) => {
       alert(error?.response?.data?.error || 'Error al importar inventario');
@@ -65,7 +121,7 @@ export default function Inventory() {
   const resetMovementForm = () => {
     setMovementForm({
       product_id: '',
-      movement_type: 'entry',
+      movement_type: 'adjustment',
       quantity: '',
       reference_number: '',
       notes: '',
@@ -75,7 +131,6 @@ export default function Inventory() {
   const handleStockEdit = (item: InventoryItem) => {
     setEditingItem(item);
     setStockForm({
-      quantity: item.quantity.toString(),
       min_stock: item.min_stock.toString(),
       max_stock: item.max_stock.toString(),
       location: item.location || '',
@@ -100,7 +155,6 @@ export default function Inventory() {
       updateStockMutation.mutate({
         id: editingItem.id,
         updates: {
-          quantity: Number(stockForm.quantity),
           min_stock: Number(stockForm.min_stock),
           max_stock: Number(stockForm.max_stock),
           location: stockForm.location || undefined,
@@ -109,7 +163,27 @@ export default function Inventory() {
     }
   };
 
-  const lowStockItems = inventory?.filter((item) => item.quantity <= item.min_stock) || [];
+  const inventoryItems = inventory || [];
+  const lowStockItems = inventoryItems.filter((item) => item.quantity <= item.min_stock);
+  const highStockItems = inventoryItems.filter((item) => item.max_stock > 0 && item.quantity >= item.max_stock);
+  const inventoryValue = inventoryItems.reduce((total, item) => total + (Number(item.quantity || 0) * Number(item.unit_price || 0)), 0);
+  const filteredInventory = useMemo(() => {
+    const search = filters.search.trim().toLowerCase();
+    return (inventory || []).filter((item) => {
+      const isLow = item.quantity <= item.min_stock;
+      const isHigh = item.max_stock > 0 && item.quantity >= item.max_stock;
+      const status = isLow ? 'low' : isHigh ? 'high' : 'normal';
+      const matchesSearch = !search || [
+        item.product_name,
+        item.barcode,
+        item.category_name,
+        item.location,
+      ].some((value) => String(value || '').toLowerCase().includes(search));
+      const matchesCategory = !filters.category || item.category_name === filters.category;
+      const matchesStatus = !filters.status || status === filters.status;
+      return matchesSearch && matchesCategory && matchesStatus;
+    });
+  }, [inventory, filters]);
 
   return (
     <div className="page-container">
@@ -118,14 +192,18 @@ export default function Inventory() {
           <h1>Inventario</h1>
           <p>Gestión de inventario y movimientos de stock</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div className="header-actions">
+          <button className="btn-secondary" onClick={() => exportInventoryExcel(filters)}>
+            <Download size={16} />
+            Exportar Inventario
+          </button>
           <button className="btn-secondary" onClick={() => setShowImportModal(true)}>
-            <Upload size={20} />
+            <Upload size={16} />
             Importar Excel
           </button>
           <button className="btn-primary" onClick={() => { resetMovementForm(); setShowMovementModal(true); }}>
-            <Plus size={20} />
-            Nuevo Movimiento
+            <Plus size={16} />
+            Ajuste de Inventario
           </button>
         </div>
       </div>
@@ -140,6 +218,79 @@ export default function Inventory() {
         </div>
       )}
 
+      <div className="inventory-summary-grid">
+        <div className="inventory-summary-card summary-blue">
+          <span className="summary-icon"><Boxes size={15} /></span>
+          <div>
+            <strong>{inventoryItems.length}</strong>
+            <small>Total productos</small>
+          </div>
+        </div>
+        <div className="inventory-summary-card summary-amber">
+          <span className="summary-icon"><AlertTriangle size={15} /></span>
+          <div>
+            <strong>{lowStockItems.length}</strong>
+            <small>Stock bajo</small>
+          </div>
+        </div>
+        <div className="inventory-summary-card summary-green">
+          <span className="summary-icon"><TrendingUp size={15} /></span>
+          <div>
+            <strong>{highStockItems.length}</strong>
+            <small>Stock alto</small>
+          </div>
+        </div>
+        <div className="inventory-summary-card summary-teal">
+          <span className="summary-icon"><Wallet size={15} /></span>
+          <div>
+            <strong>S/ {inventoryValue.toFixed(2)}</strong>
+            <small>Valor estimado</small>
+          </div>
+        </div>
+      </div>
+
+      <div className="inventory-filters">
+        <div className="inventory-filters-title">
+          <Filter size={20} />
+          <strong>Filtros</strong>
+        </div>
+        <div className="inventory-filters-grid">
+          <label className="inventory-search-field">
+            <Search size={20} />
+            <input
+              type="text"
+              placeholder="Buscar por producto, código, categoría o ubicación..."
+              value={filters.search}
+              onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+            />
+          </label>
+          <label>
+            Categoría
+            <select
+              value={filters.category}
+              onChange={(e) => setFilters({ ...filters, category: e.target.value })}
+            >
+              <option value="">Todas las categorías</option>
+              {categories?.map((category) => (
+                <option key={category.id} value={category.name}>{category.name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Estado
+            <select
+              value={filters.status}
+              onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+            >
+              <option value="">Todos los estados</option>
+              <option value="low">Bajo</option>
+              <option value="normal">Normal</option>
+              <option value="high">Alto</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
       <div className="table-container">
         <table>
           <thead>
@@ -147,19 +298,19 @@ export default function Inventory() {
               <th>Producto</th>
               <th>Categoría</th>
               <th>Stock Actual</th>
-              <th>Stock Mínimo</th>
-              <th>Stock Máximo</th>
+              <th>Stock mínimo</th>
+              <th>Stock máximo</th>
               <th>Ubicación</th>
               <th>Estado</th>
               <th>Acciones</th>
             </tr>
           </thead>
           <tbody>
-            {inventory?.map((item) => {
+            {filteredInventory.map((item) => {
               const isLow = item.quantity <= item.min_stock;
               const isHigh = item.max_stock > 0 && item.quantity >= item.max_stock;
               return (
-                <tr key={item.id}>
+                <tr key={item.id} className={isLow ? 'inventory-row-low' : isHigh ? 'inventory-row-high' : ''}>
                   <td>
                     <div className="product-name">{item.product_name}</div>
                     {item.barcode && (
@@ -192,6 +343,13 @@ export default function Inventory() {
                 </tr>
               );
             })}
+            {filteredInventory.length === 0 && (
+              <tr>
+                <td colSpan={8} className="empty-table-message">
+                  No hay productos para los filtros seleccionados.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -199,7 +357,7 @@ export default function Inventory() {
       {showMovementModal && (
         <div className="modal-overlay" onClick={() => { setShowMovementModal(false); resetMovementForm(); }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h2>Nuevo Movimiento de Inventario</h2>
+            <h2>Nuevo Ajuste de Inventario</h2>
             <form onSubmit={handleMovementSubmit}>
               <div className="form-group">
                 <label>Producto *</label>
@@ -217,19 +375,7 @@ export default function Inventory() {
                 </select>
               </div>
               <div className="form-group">
-                <label>Tipo de Movimiento *</label>
-                <select
-                  value={movementForm.movement_type}
-                  onChange={(e) => setMovementForm({ ...movementForm, movement_type: e.target.value as any })}
-                  required
-                >
-                  <option value="entry">Entrada</option>
-                  <option value="exit">Salida</option>
-                  <option value="adjustment">Ajuste</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label>Cantidad *</label>
+                <label>Cantidad faltante a descontar *</label>
                 <input
                   type="number"
                   min="1"
@@ -239,19 +385,21 @@ export default function Inventory() {
                 />
               </div>
               <div className="form-group">
-                <label>Número de Referencia</label>
+                <label>Número de Comprobante / Referencia</label>
                 <input
                   type="text"
                   value={movementForm.reference_number}
                   onChange={(e) => setMovementForm({ ...movementForm, reference_number: e.target.value })}
+                  placeholder="Se genera automáticamente si se deja vacío"
                 />
               </div>
               <div className="form-group">
-                <label>Notas</label>
+                <label>Motivo del Ajuste *</label>
                 <textarea
                   value={movementForm.notes}
                   onChange={(e) => setMovementForm({ ...movementForm, notes: e.target.value })}
                   rows={3}
+                  required
                 />
               </div>
               <div className="modal-actions">
@@ -259,7 +407,7 @@ export default function Inventory() {
                   Cancelar
                 </button>
                 <button type="submit" className="btn-primary">
-                  Registrar Movimiento
+                  Registrar e Imprimir Ajuste
                 </button>
               </div>
             </form>
@@ -278,17 +426,16 @@ export default function Inventory() {
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label>Cantidad Actual *</label>
+                  <label>Cantidad Actual</label>
                   <input
                     type="number"
-                    min="0"
-                    value={stockForm.quantity}
-                    onChange={(e) => setStockForm({ ...stockForm, quantity: e.target.value })}
-                    required
+                    value={editingItem.quantity}
+                    disabled
+                    title="La cantidad actual se modifica mediante movimientos de inventario"
                   />
                 </div>
                 <div className="form-group">
-                  <label>Stock Mínimo *</label>
+                  <label>Stock mínimo *</label>
                   <input
                     type="number"
                     min="0"
@@ -300,7 +447,7 @@ export default function Inventory() {
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label>Stock Máximo</label>
+                  <label>Stock máximo</label>
                   <input
                     type="number"
                     min="0"
@@ -335,9 +482,9 @@ export default function Inventory() {
           <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
             <h2>Importar Inventario desde Excel</h2>
             <p className="modal-subtitle">
-              Selecciona un archivo Excel (.xlsx) con las columnas: <strong>Código de Barras</strong> (o <strong>Producto</strong>), <strong>Cantidad</strong> (se suma al stock actual), Stock Mínimo, Stock Máximo, Ubicación. Descarga la plantilla de ejemplo para rellenar correctamente.
+              Selecciona un archivo Excel (.xlsx) con las columnas: <strong>Código de Barras</strong> (o <strong>Producto</strong>), <strong>Cantidad</strong> (se suma al stock actual), Stock mínimo, Stock máximo, Ubicación. Descarga la plantilla de ejemplo para rellenar correctamente.
             </p>
-            <div className="form-group" style={{ marginBottom: '1rem' }}>
+            <div className="form-group" style={{ marginBottom: '1rem', display: 'grid', gap: '0.75rem' }}>
               <button
                 type="button"
                 className="btn-secondary"
@@ -410,3 +557,5 @@ export default function Inventory() {
     </div>
   );
 }
+
+

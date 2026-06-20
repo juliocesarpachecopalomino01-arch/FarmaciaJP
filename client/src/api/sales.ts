@@ -19,6 +19,10 @@ export interface Sale {
   tax_amount: number;
   final_amount: number;
   payment_method: string;
+  payment_method_name?: string;
+  payment_reference?: string;
+  cash_accounting_date?: string;
+  cash_opened_at?: string;
   status: string;
   notes?: string;
   created_at: string;
@@ -49,6 +53,7 @@ export interface CreateSaleRequest {
   discount?: number;
   tax_amount?: number;
   payment_method: string;
+  payment_reference?: string;
   payment_details?: PaymentMethodDetail[];
   notes?: string;
 }
@@ -91,11 +96,6 @@ export const salesApi = {
 
   create: async (sale: CreateSaleRequest): Promise<{ id: number; sale_number: string; message: string }> => {
     const response = await api.post('/sales', sale);
-    return response.data;
-  },
-
-  cancel: async (id: number): Promise<{ message: string }> => {
-    const response = await api.delete(`/sales/${id}`);
     return response.data;
   },
 };

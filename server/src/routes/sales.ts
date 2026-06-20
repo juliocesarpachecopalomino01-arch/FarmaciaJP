@@ -11,6 +11,30 @@ interface CashRegisterError {
   message: string;
 }
 
+type PaymentMethodConfig = {
+  id: number;
+  requires_reference: number;
+  reference_required: number;
+  reference_label?: string;
+};
+
+function validatePaymentMethod(paymentMethod: string, paymentReference?: string): Promise<PaymentMethodConfig> {
+  return new Promise((resolve, reject) => {
+    db.get(
+      'SELECT id, requires_reference, reference_required, reference_label FROM payment_methods WHERE value = ? AND is_active = 1',
+      [paymentMethod],
+      (err, row: PaymentMethodConfig | undefined) => {
+        if (err) return reject(new Error('Database error'));
+        if (!row) return reject(new Error('El método de pago no existe o está inactivo.'));
+        if (row.reference_required === 1 && !paymentReference?.trim()) {
+          return reject(new Error(`${row.reference_label || 'Código / Referencia'} es obligatorio para este método de pago.`));
+        }
+        resolve(row);
+      }
+    );
+  });
+}
+
 function getOpenCashRegister(userId: number): Promise<{ id: number }> {
   return new Promise((resolve, reject) => {
     db.get(
@@ -53,21 +77,28 @@ router.get('/', authenticateToken, [
   const isAdmin = req.user?.role === 'admin';
 
   let query = `
-    SELECT s.*, c.name as customer_name, u.username as user_name
+    SELECT s.*,
+           COALESCE(pm.name, s.payment_method) as payment_method_name,
+           COALESCE(cr.accounting_date, DATE(s.created_at)) as cash_accounting_date,
+           cr.opened_at as cash_opened_at,
+           c.name as customer_name,
+           u.username as user_name
     FROM sales s
     LEFT JOIN customers c ON s.customer_id = c.id
+    LEFT JOIN payment_methods pm ON pm.value = s.payment_method
+    LEFT JOIN cash_registers cr ON cr.id = s.cash_register_id
     INNER JOIN users u ON s.user_id = u.id
     WHERE 1=1
   `;
   const params: any[] = [];
 
   if (start_date) {
-    query += ' AND DATE(s.created_at) >= ?';
+    query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
     params.push(start_date);
   }
 
   if (end_date) {
-    query += ' AND DATE(s.created_at) <= ?';
+    query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
     params.push(end_date);
   }
 
@@ -111,38 +142,43 @@ router.get('/', authenticateToken, [
     }
 
     // Get total count
-    let countQuery = 'SELECT COUNT(*) as total FROM sales WHERE 1=1';
+    let countQuery = `
+      SELECT COUNT(*) as total
+      FROM sales s
+      LEFT JOIN cash_registers cr ON cr.id = s.cash_register_id
+      WHERE 1=1
+    `;
     const countParams: any[] = [];
 
     if (start_date) {
-      countQuery += ' AND DATE(created_at) >= ?';
+      countQuery += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
       countParams.push(start_date);
     }
     if (end_date) {
-      countQuery += ' AND DATE(created_at) <= ?';
+      countQuery += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
       countParams.push(end_date);
     }
     if (customer_id) {
-      countQuery += ' AND customer_id = ?';
+      countQuery += ' AND s.customer_id = ?';
       countParams.push(customer_id);
     }
     if (cash_register_id) {
-      countQuery += ' AND cash_register_id = ?';
+      countQuery += ' AND s.cash_register_id = ?';
       countParams.push(cash_register_id);
     }
     if (user_id) {
-      countQuery += ' AND user_id = ?';
+      countQuery += ' AND s.user_id = ?';
       countParams.push(user_id);
     } else if (!isAdmin) {
-      countQuery += ' AND user_id = ?';
+      countQuery += ' AND s.user_id = ?';
       countParams.push(req.user!.id);
     }
     if (payment_method) {
-      countQuery += ' AND payment_method = ?';
+      countQuery += ' AND s.payment_method = ?';
       countParams.push(payment_method);
     }
     if (status) {
-      countQuery += ' AND status = ?';
+      countQuery += ' AND s.status = ?';
       countParams.push(status);
     }
 
@@ -167,9 +203,10 @@ router.get('/', authenticateToken, [
 // Get sales available for return (with items not fully returned)
 router.get('/available-for-return', authenticateToken, (req: AuthRequest, res) => {
   db.all(
-    `SELECT DISTINCT s.*, c.name as customer_name, u.username as user_name
+    `SELECT DISTINCT s.*, COALESCE(pm.name, s.payment_method) as payment_method_name, c.name as customer_name, u.username as user_name
      FROM sales s
      LEFT JOIN customers c ON s.customer_id = c.id
+     LEFT JOIN payment_methods pm ON pm.value = s.payment_method
      INNER JOIN users u ON s.user_id = u.id
      INNER JOIN sale_items si ON s.id = si.sale_id
      LEFT JOIN (
@@ -196,10 +233,11 @@ router.get('/:id', (req, res) => {
   const { id } = req.params;
 
   db.get(
-    `SELECT s.*, c.name as customer_name, c.email as customer_email,
+    `SELECT s.*, COALESCE(pm.name, s.payment_method) as payment_method_name, c.name as customer_name, c.email as customer_email,
             u.username as user_name, u.full_name as user_full_name
      FROM sales s
      LEFT JOIN customers c ON s.customer_id = c.id
+     LEFT JOIN payment_methods pm ON pm.value = s.payment_method
      INNER JOIN users u ON s.user_id = u.id
      WHERE s.id = ?`,
     [id],
@@ -241,6 +279,7 @@ router.post('/', authenticateToken, [
   body('items.*.product_id').isInt().withMessage('Product ID is required'),
   body('items.*.quantity').isInt({ min: 1 }).withMessage('Valid quantity is required'),
   body('payment_method').notEmpty().withMessage('Payment method is required'),
+  body('payment_reference').optional().isString(),
 ], (req: AuthRequest, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -253,6 +292,7 @@ router.post('/', authenticateToken, [
     discount = 0,
     tax_amount = 0,
     payment_method,
+    payment_reference,
     notes,
   } = req.body;
 
@@ -293,14 +333,19 @@ router.post('/', authenticateToken, [
               const unitPrice = item.unit_price || product.unit_price;
               const itemDiscount = item.discount || 0;
               const subtotal = (unitPrice * item.quantity) - itemDiscount;
+              const bonusPerUnit = product.has_sales_bonus ? Number(product.sales_bonus_per_unit || 0) : 0;
+              const bonusTotal = bonusPerUnit * Number(item.quantity || 0);
               totalAmount += subtotal;
 
               saleItems.push({
                 product_id: item.product_id,
                 quantity: item.quantity,
                 unit_price: unitPrice,
+                cost_price: product.cost_price !== null && product.cost_price !== undefined ? Number(product.cost_price) : null,
                 discount: itemDiscount,
                 subtotal,
+                sales_bonus_per_unit: bonusPerUnit,
+                sales_bonus_total: bonusTotal,
               });
             }
 
@@ -317,7 +362,8 @@ router.post('/', authenticateToken, [
     });
   };
 
-  validateItems()
+  validatePaymentMethod(payment_method, payment_reference)
+    .then(() => validateItems())
     .then(() => getOpenCashRegister(req.user!.id))
     .then((cashRegister) => {
       const finalAmount = totalAmount - discount + tax_amount;
@@ -342,9 +388,9 @@ router.post('/', authenticateToken, [
 
       // Create sale
       db.run(
-        `INSERT INTO sales (sale_number, customer_id, user_id, cash_register_id, total_amount, discount, tax_amount, final_amount, payment_method, notes, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [saleNumber, customer_id || null, req.user!.id, cashRegister.id, totalAmount, discount, tax_amount, finalAmount, payment_method, notes || null, peruDateTime],
+        `INSERT INTO sales (sale_number, customer_id, user_id, cash_register_id, total_amount, discount, tax_amount, final_amount, payment_method, payment_reference, notes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [saleNumber, customer_id || null, req.user!.id, cashRegister.id, totalAmount, discount, tax_amount, finalAmount, payment_method, payment_reference?.trim() || null, notes || null, peruDateTime],
         function(err) {
           if (err) {
             return res.status(500).json({ error: 'Database error' });
@@ -358,9 +404,9 @@ router.post('/', authenticateToken, [
 
           saleItems.forEach((item) => {
             db.run(
-              `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, discount, subtotal)
-               VALUES (?, ?, ?, ?, ?, ?)`,
-              [saleId, item.product_id, item.quantity, item.unit_price, item.discount, item.subtotal],
+              `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, cost_price, discount, subtotal, sales_bonus_per_unit, sales_bonus_total)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [saleId, item.product_id, item.quantity, item.unit_price, item.cost_price, item.discount, item.subtotal, item.sales_bonus_per_unit, item.sales_bonus_total],
               (err) => {
                 if (err) {
                   errors.push(`Error inserting item for product ${item.product_id}`);
@@ -409,39 +455,11 @@ router.post('/', authenticateToken, [
     });
 });
 
-// Delete sale (cancel)
-router.delete('/:id', authenticateToken, (req: AuthRequest, res) => {
-  const { id } = req.params;
-
-  // Get sale items to restore inventory
-  db.all('SELECT * FROM sale_items WHERE sale_id = ?', [id], (err, items: any[]) => {
-    if (err) {
-      return res.status(500).json({ error: 'Database error' });
-    }
-
-    // Restore inventory
-    items.forEach((item) => {
-      db.run(
-        'UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-        [item.quantity, item.product_id],
-        () => {}
-      );
-    });
-
-    // Delete sale
-    db.run('DELETE FROM sales WHERE id = ?', [id], function(err) {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: 'Sale not found' });
-      }
-
-      // Delete sale items
-      db.run('DELETE FROM sale_items WHERE sale_id = ?', [id], () => {
-        res.json({ message: 'Sale cancelled successfully' });
-      });
-    });
+// Sales are immutable. Cancellations must be processed through returns so stock
+// and cash movements keep a complete audit trail.
+router.delete('/:id', authenticateToken, (_req: AuthRequest, res) => {
+  return res.status(405).json({
+    error: 'No se permite eliminar ni cancelar ventas. Use el módulo de devoluciones para afectar stock y caja correctamente.',
   });
 });
 

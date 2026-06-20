@@ -9,6 +9,8 @@ export interface Product {
   category_name?: string;
   unit_price: number;
   cost_price?: number;
+  has_sales_bonus?: number | boolean;
+  sales_bonus_per_unit?: number;
   requires_prescription: boolean;
   expiration_date?: string;
   is_active?: number;
@@ -77,6 +79,24 @@ export const productsApi = {
     const a = document.createElement('a');
     a.href = url;
     a.download = 'plantilla_importar_productos.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  },
+
+  exportExcel: async (): Promise<void> => {
+    const token = localStorage.getItem('token');
+    const response = await fetch(buildApiUrl('/export/products/excel'), {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) throw new Error('Error al exportar productos');
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const today = new Date().toISOString().split('T')[0];
+    a.href = url;
+    a.download = `productos-${today}.xlsx`;
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(url);

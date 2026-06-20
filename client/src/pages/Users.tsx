@@ -1,100 +1,207 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { usersApi, User, CreateUserRequest, UserPermissions } from '../api/users';
+import { usersApi, User, Worker, UserProfile, CreateUserRequest, UserPermissions } from '../api/users';
 import { MODULES } from '../constants/modules';
-import { Plus, Edit, Trash2 } from 'lucide-react';
+import { Plus, Edit, Trash2, UserCog, Briefcase, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import './Users.css';
 
+type Tab = 'users' | 'workers' | 'profiles';
+
+const emptyPermissions = () => MODULES.reduce<UserPermissions>((acc, mod) => {
+  acc[mod.key] = mod.key !== 'users' && mod.key !== 'company-settings';
+  return acc;
+}, {});
+
+const emptyWorker = {
+  document_type: 'DNI',
+  document_number: '',
+  full_name: '',
+  email: '',
+  phone: '',
+  address: '',
+  position: '',
+  hire_date: '',
+  is_active: true,
+};
+
+const emptyProfile = {
+  name: '',
+  description: '',
+  role: 'employee' as 'admin' | 'employee',
+  is_active: true,
+  permissions: emptyPermissions(),
+};
+
 export default function Users() {
   const { user } = useAuth();
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [editingUser, setEditingUser] = useState<User | null>(null);
-  const [editPermissions, setEditPermissions] = useState<UserPermissions>({});
-  const [createForm, setCreateForm] = useState<CreateUserRequest>({
-    username: '',
-    email: '',
-    password: '',
-    full_name: '',
-    role: 'employee',
-    permissions: MODULES.map((m) => m.key),
-  });
-  const [editForm, setEditForm] = useState({ full_name: '', email: '', role: 'employee' as string, is_active: true });
-
   const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState<Tab>('users');
+  const [userModal, setUserModal] = useState(false);
+  const [workerModal, setWorkerModal] = useState(false);
+  const [profileModal, setProfileModal] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
+  const [editingProfile, setEditingProfile] = useState<UserProfile | null>(null);
+  const [editPermissions, setEditPermissions] = useState<UserPermissions>({});
 
-  const { data: users } = useQuery('users', usersApi.getAll, {
-    enabled: user?.role === 'admin',
+  const [userForm, setUserForm] = useState<CreateUserRequest>({
+    username: '',
+    password: '',
+    worker_id: '',
+    profile_id: '',
   });
+  const [editUserForm, setEditUserForm] = useState({ worker_id: '', profile_id: '', is_active: true });
+  const [workerForm, setWorkerForm] = useState({ ...emptyWorker });
+  const [profileForm, setProfileForm] = useState({ ...emptyProfile });
 
-  const createMutation = useMutation(usersApi.create, {
+  const { data: users } = useQuery('users', usersApi.getAll, { enabled: user?.role === 'admin' });
+  const { data: workers } = useQuery('workers', usersApi.getWorkers, { enabled: user?.role === 'admin' });
+  const { data: profiles } = useQuery('user-profiles', usersApi.getProfiles, { enabled: user?.role === 'admin' });
+
+  const refreshAll = () => {
+    queryClient.invalidateQueries('users');
+    queryClient.invalidateQueries('workers');
+    queryClient.invalidateQueries('user-profiles');
+  };
+
+  const availableWorkers = useMemo(() => {
+    const editingWorkerId = editingUser?.worker_id;
+    return (workers || []).filter((worker) => Number(worker.is_active) === 1 || worker.is_active === true)
+      .filter((worker) => !worker.user_id || worker.id === editingWorkerId);
+  }, [workers, editingUser]);
+
+  const activeProfiles = useMemo(() => (
+    (profiles || []).filter((profile) => Number(profile.is_active) === 1 || profile.is_active === true)
+  ), [profiles]);
+
+  const createUserMutation = useMutation(usersApi.create, {
     onSuccess: () => {
-      queryClient.invalidateQueries('users');
-      setShowCreateModal(false);
-      setCreateForm({ username: '', email: '', password: '', full_name: '', role: 'employee', permissions: MODULES.map((m) => m.key) });
+      refreshAll();
+      setUserModal(false);
+      setUserForm({ username: '', password: '', worker_id: '', profile_id: '' });
     },
+    onError: (error: any) => alert(error?.response?.data?.error || 'No se pudo crear el usuario'),
   });
 
-  const updateMutation = useMutation(
-    (data: { id: number; full_name?: string; email?: string; role?: string; is_active?: boolean }) =>
-      usersApi.update(data.id, data),
+  const updateUserMutation = useMutation(
+    (payload: { id: number; data: Partial<User> }) => usersApi.update(payload.id, payload.data),
     {
       onSuccess: () => {
-        queryClient.invalidateQueries('users');
+        refreshAll();
+        setUserModal(false);
+        setEditingUser(null);
       },
+      onError: (error: any) => alert(error?.response?.data?.error || 'No se pudo actualizar el usuario'),
     }
   );
 
+  const createWorkerMutation = useMutation(usersApi.createWorker, {
+    onSuccess: () => {
+      refreshAll();
+      setWorkerModal(false);
+      setWorkerForm({ ...emptyWorker });
+    },
+    onError: (error: any) => alert(error?.response?.data?.error || 'No se pudo crear el trabajador'),
+  });
+
+  const updateWorkerMutation = useMutation(
+    (payload: { id: number; data: Partial<Worker> }) => usersApi.updateWorker(payload.id, payload.data),
+    {
+      onSuccess: () => {
+        refreshAll();
+        setWorkerModal(false);
+        setEditingWorker(null);
+      },
+      onError: (error: any) => alert(error?.response?.data?.error || 'No se pudo actualizar el trabajador'),
+    }
+  );
+
+  const createProfileMutation = useMutation(usersApi.createProfile, {
+    onSuccess: () => {
+      refreshAll();
+      setProfileModal(false);
+      setProfileForm({ ...emptyProfile, permissions: emptyPermissions() });
+    },
+    onError: (error: any) => alert(error?.response?.data?.error || 'No se pudo crear el perfil'),
+  });
+
+  const updateProfileMutation = useMutation(
+    (payload: { id: number; data: Partial<UserProfile> }) => usersApi.updateProfile(payload.id, payload.data),
+    {
+      onSuccess: () => {
+        refreshAll();
+        setProfileModal(false);
+        setEditingProfile(null);
+      },
+      onError: (error: any) => alert(error?.response?.data?.error || 'No se pudo actualizar el perfil'),
+    }
+  );
+
+  const deleteUserMutation = useMutation(usersApi.delete, { onSuccess: refreshAll });
+  const deleteWorkerMutation = useMutation(usersApi.deleteWorker, { onSuccess: refreshAll });
+  const deleteProfileMutation = useMutation(usersApi.deleteProfile, { onSuccess: refreshAll });
   const permissionsMutation = useMutation(
-    (data: { id: number; permissions: UserPermissions }) => usersApi.updatePermissions(data.id, data.permissions),
-    {
-      onSuccess: () => {
-        queryClient.invalidateQueries('users');
-      },
-    }
+    (payload: { id: number; permissions: UserPermissions }) => usersApi.updatePermissions(payload.id, payload.permissions),
+    { onSuccess: refreshAll }
   );
 
-  const deleteMutation = useMutation(usersApi.delete, {
-    onSuccess: () => {
-      queryClient.invalidateQueries('users');
-      setShowEditModal(false);
-      setEditingUser(null);
-    },
-  });
-
-  const openEditModal = async (u: User) => {
-    setEditingUser(u);
-    setEditForm({ full_name: u.full_name, email: u.email, role: u.role, is_active: !!u.is_active });
-    const perms = await usersApi.getPermissions(u.id);
-    setEditPermissions(perms);
-    setShowEditModal(true);
-  };
-
-  const handleCreateSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!createForm.username || !createForm.email || !createForm.password || !createForm.full_name) {
-      alert('Complete todos los campos');
-      return;
-    }
-    createMutation.mutate(createForm);
-  };
-
-  const handleEditSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingUser) return;
-    updateMutation.mutate({
-      id: editingUser.id,
-      full_name: editForm.full_name,
-      email: editForm.email,
-      role: editForm.role,
-      is_active: editForm.is_active,
-    });
-    if (editForm.role === 'employee') {
-      permissionsMutation.mutate({ id: editingUser.id, permissions: editPermissions });
-    }
-    setShowEditModal(false);
+  const openCreateUser = () => {
     setEditingUser(null);
+    setUserForm({ username: '', password: '', worker_id: '', profile_id: activeProfiles[0]?.id || '' });
+    setEditPermissions({});
+    setUserModal(true);
+  };
+
+  const openEditUser = async (item: User) => {
+    setEditingUser(item);
+    setEditUserForm({
+      worker_id: item.worker_id ? String(item.worker_id) : '',
+      profile_id: item.profile_id ? String(item.profile_id) : '',
+      is_active: item.is_active === true || Number(item.is_active) === 1,
+    });
+    setEditPermissions(await usersApi.getPermissions(item.id));
+    setUserModal(true);
+  };
+
+  const openCreateWorker = () => {
+    setEditingWorker(null);
+    setWorkerForm({ ...emptyWorker });
+    setWorkerModal(true);
+  };
+
+  const openEditWorker = (item: Worker) => {
+    setEditingWorker(item);
+    setWorkerForm({
+      document_type: item.document_type || 'DNI',
+      document_number: item.document_number || '',
+      full_name: item.full_name || '',
+      email: item.email || '',
+      phone: item.phone || '',
+      address: item.address || '',
+      position: item.position || '',
+      hire_date: item.hire_date ? item.hire_date.slice(0, 10) : '',
+      is_active: item.is_active === true || Number(item.is_active) === 1,
+    });
+    setWorkerModal(true);
+  };
+
+  const openCreateProfile = () => {
+    setEditingProfile(null);
+    setProfileForm({ ...emptyProfile, permissions: emptyPermissions() });
+    setProfileModal(true);
+  };
+
+  const openEditProfile = (item: UserProfile) => {
+    setEditingProfile(item);
+    setProfileForm({
+      name: item.name,
+      description: item.description || '',
+      role: item.role,
+      is_active: item.is_active === true || Number(item.is_active) === 1,
+      permissions: item.permissions || emptyPermissions(),
+    });
+    setProfileModal(true);
   };
 
   if (user?.role !== 'admin') {
@@ -112,238 +219,415 @@ export default function Users() {
       <div className="page-header">
         <div>
           <h1>Usuarios</h1>
-          <p>Gestión de usuarios y permisos por módulo</p>
+          <p>Trabajadores, perfiles y accesos al sistema</p>
         </div>
-        <button className="btn-primary" onClick={() => setShowCreateModal(true)}>
+        <button className="btn-primary" onClick={activeTab === 'workers' ? openCreateWorker : activeTab === 'profiles' ? openCreateProfile : openCreateUser}>
           <Plus size={20} />
-          Nuevo Usuario
+          {activeTab === 'workers' ? 'Nuevo Trabajador' : activeTab === 'profiles' ? 'Nuevo Perfil' : 'Nuevo Usuario'}
         </button>
       </div>
 
-      <div className="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Usuario</th>
-              <th>Nombre Completo</th>
-              <th>Email</th>
-              <th>Rol</th>
-              <th>Estado</th>
-              <th>Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users?.map((u) => (
-              <tr key={u.id}>
-                <td>{u.username}</td>
-                <td>{u.full_name}</td>
-                <td>{u.email}</td>
-                <td>
-                  <span className="badge badge-normal">{u.role}</span>
-                </td>
-                <td>
-                  <span className={u.is_active ? 'badge badge-success' : 'badge badge-warning'}>
-                    {u.is_active ? 'Activo' : 'Inactivo'}
-                  </span>
-                </td>
-                <td>
-                  <div className="action-buttons">
-                    <button
-                      onClick={() => openEditModal(u)}
-                      className="btn-icon"
-                      title="Editar"
-                    >
-                      <Edit size={16} />
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (u.id === user?.id) {
-                          alert('No puede desactivar su propia cuenta');
-                          return;
-                        }
-                        if (window.confirm('¿Está seguro de desactivar este usuario?')) {
-                          deleteMutation.mutate(u.id);
-                        }
-                      }}
-                      className="btn-icon btn-danger"
-                      disabled={u.id === user?.id}
-                      title="Desactivar"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="tabs-container user-tabs">
+        <button className={`tab-button ${activeTab === 'users' ? 'active' : ''}`} onClick={() => setActiveTab('users')}>
+          <UserCog size={18} /> Usuarios
+        </button>
+        <button className={`tab-button ${activeTab === 'workers' ? 'active' : ''}`} onClick={() => setActiveTab('workers')}>
+          <Briefcase size={18} /> Trabajadores
+        </button>
+        <button className={`tab-button ${activeTab === 'profiles' ? 'active' : ''}`} onClick={() => setActiveTab('profiles')}>
+          <ShieldCheck size={18} /> Perfiles
+        </button>
       </div>
 
-      {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h2>Nuevo Usuario</h2>
-            <form onSubmit={handleCreateSubmit}>
-              <div className="form-group">
-                <label>Usuario *</label>
-                <input
-                  value={createForm.username}
-                  onChange={(e) => setCreateForm({ ...createForm, username: e.target.value })}
-                  required
-                />
+      {activeTab === 'users' && (
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Usuario</th>
+                <th>Trabajador</th>
+                <th>Perfil</th>
+                <th>Email</th>
+                <th>Estado</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(users || []).map((item) => (
+                <tr key={item.id}>
+                  <td>{item.username}</td>
+                  <td>
+                    <strong>{item.worker_name || item.full_name}</strong>
+                    <div className="muted">{item.document_number || '-'}</div>
+                  </td>
+                  <td>
+                    <span className="badge badge-normal">{item.profile_name || item.role}</span>
+                  </td>
+                  <td>{item.email}</td>
+                  <td>
+                    <span className={Number(item.is_active) === 1 || item.is_active === true ? 'badge badge-success' : 'badge badge-warning'}>
+                      {Number(item.is_active) === 1 || item.is_active === true ? 'Activo' : 'Inactivo'}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="action-buttons">
+                      <button onClick={() => openEditUser(item)} className="btn-icon" title="Editar usuario"><Edit size={16} /></button>
+                      <button
+                        onClick={() => {
+                          if (item.id === user?.id) return alert('No puede desactivar su propia cuenta');
+                          if (window.confirm('¿Está seguro de desactivar este usuario?')) deleteUserMutation.mutate(item.id);
+                        }}
+                        className="btn-icon btn-danger"
+                        disabled={item.id === user?.id}
+                        title="Desactivar usuario"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeTab === 'workers' && (
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Trabajador</th>
+                <th>Documento</th>
+                <th>Contacto</th>
+                <th>Cargo</th>
+                <th>Usuario</th>
+                <th>Estado</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(workers || []).map((item) => (
+                <tr key={item.id}>
+                  <td><strong>{item.full_name}</strong></td>
+                  <td>{item.document_type || 'DNI'} {item.document_number || '-'}</td>
+                  <td>
+                    <div>{item.email || '-'}</div>
+                    <div className="muted">{item.phone || ''}</div>
+                  </td>
+                  <td>{item.position || '-'}</td>
+                  <td>{item.username ? <span className="badge badge-normal">{item.username}</span> : '-'}</td>
+                  <td>
+                    <span className={Number(item.is_active) === 1 || item.is_active === true ? 'badge badge-success' : 'badge badge-warning'}>
+                      {Number(item.is_active) === 1 || item.is_active === true ? 'Activo' : 'Inactivo'}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="action-buttons">
+                      <button onClick={() => openEditWorker(item)} className="btn-icon" title="Editar trabajador"><Edit size={16} /></button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm('¿Está seguro de desactivar este trabajador?')) deleteWorkerMutation.mutate(item.id);
+                        }}
+                        className="btn-icon btn-danger"
+                        disabled={!!item.user_id}
+                        title={item.user_id ? 'No se puede desactivar si tiene usuario vinculado' : 'Desactivar trabajador'}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeTab === 'profiles' && (
+        <div className="profiles-grid">
+          {(profiles || []).map((profile) => (
+            <div className="profile-card" key={profile.id}>
+              <div>
+                <h3>{profile.name}</h3>
+                <p>{profile.description || 'Sin descripción'}</p>
               </div>
-              <div className="form-group">
-                <label>Nombre Completo *</label>
-                <input
-                  value={createForm.full_name}
-                  onChange={(e) => setCreateForm({ ...createForm, full_name: e.target.value })}
-                  required
-                />
+              <div className="profile-meta">
+                <span className="badge badge-normal">{profile.role === 'admin' ? 'Administrador' : 'Empleado'}</span>
+                <span className={Number(profile.is_active) === 1 || profile.is_active === true ? 'badge badge-success' : 'badge badge-warning'}>
+                  {Number(profile.is_active) === 1 || profile.is_active === true ? 'Activo' : 'Inactivo'}
+                </span>
               </div>
-              <div className="form-group">
-                <label>Email *</label>
-                <input
-                  type="email"
-                  value={createForm.email}
-                  onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
-                  required
-                />
+              <div className="profile-permissions">
+                {MODULES.filter((module) => profile.permissions?.[module.key] !== false).slice(0, 6).map((module) => (
+                  <span key={module.key}>{module.label}</span>
+                ))}
               </div>
-              <div className="form-group">
-                <label>Contraseña *</label>
-                <input
-                  type="password"
-                  value={createForm.password}
-                  onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                  required
-                  minLength={6}
-                  placeholder="Mínimo 6 caracteres"
-                />
-              </div>
-              <div className="form-group">
-                <label>Rol</label>
-                <select
-                  value={createForm.role}
-                  onChange={(e) => setCreateForm({ ...createForm, role: e.target.value as 'admin' | 'employee' })}
+              <div className="profile-actions">
+                <button className="btn-secondary" onClick={() => openEditProfile(profile)}>
+                  <Edit size={16} /> Editar
+                </button>
+                <button
+                  className="btn-secondary btn-danger"
+                  disabled={profile.id === 1}
+                  onClick={() => {
+                    if (window.confirm('¿Está seguro de desactivar este perfil?')) deleteProfileMutation.mutate(profile.id);
+                  }}
                 >
-                  <option value="employee">Empleado</option>
-                  <option value="admin">Administrador</option>
-                </select>
+                  <Trash2 size={16} /> Desactivar
+                </button>
               </div>
-              {createForm.role === 'employee' && (
+            </div>
+          ))}
+        </div>
+      )}
+
+      {userModal && (
+        <div className="modal-overlay" onClick={() => { setUserModal(false); setEditingUser(null); }}>
+          <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
+            <h2>{editingUser ? `Editar Usuario - ${editingUser.username}` : 'Nuevo Usuario'}</h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (editingUser) {
+                  updateUserMutation.mutate({
+                    id: editingUser.id,
+                    data: {
+                      worker_id: Number(editUserForm.worker_id) || undefined,
+                      profile_id: Number(editUserForm.profile_id) || undefined,
+                      is_active: editUserForm.is_active,
+                    },
+                  });
+                  permissionsMutation.mutate({ id: editingUser.id, permissions: editPermissions });
+                  return;
+                }
+                if (!userForm.worker_id || !userForm.profile_id || !userForm.username || !userForm.password) {
+                  alert('Complete trabajador, perfil, usuario y contraseña');
+                  return;
+                }
+                createUserMutation.mutate({
+                  ...userForm,
+                  worker_id: Number(userForm.worker_id),
+                  profile_id: Number(userForm.profile_id),
+                });
+              }}
+            >
+              <div className="form-row">
                 <div className="form-group">
-                  <label>Permisos por módulo</label>
-                  <div className="permissions-grid">
-                    {MODULES.filter((m) => m.key !== 'users').map((mod) => (
-                      <label key={mod.key} className="permission-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={(createForm.permissions || []).includes(mod.key)}
-                          onChange={(e) => {
-                            const perms = createForm.permissions || [];
-                            if (e.target.checked) {
-                              setCreateForm({ ...createForm, permissions: [...perms, mod.key] });
-                            } else {
-                              setCreateForm({ ...createForm, permissions: perms.filter((p) => p !== mod.key) });
-                            }
-                          }}
-                        />
-                        {mod.label}
-                      </label>
+                  <label>Trabajador *</label>
+                  <select
+                    value={editingUser ? editUserForm.worker_id : userForm.worker_id}
+                    onChange={(e) => editingUser
+                      ? setEditUserForm({ ...editUserForm, worker_id: e.target.value })
+                      : setUserForm({ ...userForm, worker_id: e.target.value })}
+                    required
+                  >
+                    <option value="">Seleccionar trabajador...</option>
+                    {availableWorkers.map((worker) => (
+                      <option key={worker.id} value={worker.id}>{worker.full_name}</option>
                     ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Perfil *</label>
+                  <select
+                    value={editingUser ? editUserForm.profile_id : userForm.profile_id}
+                    onChange={(e) => editingUser
+                      ? setEditUserForm({ ...editUserForm, profile_id: e.target.value })
+                      : setUserForm({ ...userForm, profile_id: e.target.value })}
+                    required
+                  >
+                    <option value="">Seleccionar perfil...</option>
+                    {activeProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>{profile.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {!editingUser && (
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Usuario *</label>
+                    <input value={userForm.username} onChange={(e) => setUserForm({ ...userForm, username: e.target.value })} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Contraseña *</label>
+                    <input type="password" value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} minLength={6} required />
                   </div>
                 </div>
               )}
+              {editingUser && (
+                <>
+                  <div className="form-group">
+                    <label>Estado</label>
+                    <select value={editUserForm.is_active ? '1' : '0'} onChange={(e) => setEditUserForm({ ...editUserForm, is_active: e.target.value === '1' })}>
+                      <option value="1">Activo</option>
+                      <option value="0">Inactivo</option>
+                    </select>
+                  </div>
+                  <PermissionsEditor permissions={editPermissions} onChange={setEditPermissions} />
+                </>
+              )}
               <div className="modal-actions">
-                <button type="button" className="btn-secondary" onClick={() => setShowCreateModal(false)}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-primary" disabled={createMutation.isLoading}>
-                  Crear Usuario
-                </button>
+                <button type="button" className="btn-secondary" onClick={() => { setUserModal(false); setEditingUser(null); }}>Cancelar</button>
+                <button type="submit" className="btn-primary" disabled={createUserMutation.isLoading || updateUserMutation.isLoading}>Guardar</button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {showEditModal && editingUser && (
-        <div className="modal-overlay" onClick={() => { setShowEditModal(false); setEditingUser(null); }}>
+      {workerModal && (
+        <div className="modal-overlay" onClick={() => { setWorkerModal(false); setEditingWorker(null); }}>
           <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
-            <h2>Editar Usuario - {editingUser.username}</h2>
-            <form onSubmit={handleEditSubmit}>
+            <h2>{editingWorker ? 'Editar Trabajador' : 'Nuevo Trabajador'}</h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!workerForm.full_name) return alert('Ingrese el nombre del trabajador');
+                if (editingWorker) updateWorkerMutation.mutate({ id: editingWorker.id, data: workerForm });
+                else createWorkerMutation.mutate(workerForm);
+              }}
+            >
               <div className="form-row">
                 <div className="form-group">
-                  <label>Nombre Completo *</label>
-                  <input
-                    value={editForm.full_name}
-                    onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
-                    required
-                  />
+                  <label>Nombre completo *</label>
+                  <input value={workerForm.full_name} onChange={(e) => setWorkerForm({ ...workerForm, full_name: e.target.value })} required />
                 </div>
                 <div className="form-group">
-                  <label>Email *</label>
-                  <input
-                    type="email"
-                    value={editForm.email}
-                    onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                    required
-                  />
+                  <label>Cargo</label>
+                  <input value={workerForm.position} onChange={(e) => setWorkerForm({ ...workerForm, position: e.target.value })} />
                 </div>
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label>Rol</label>
-                  <select
-                    value={editForm.role}
-                    onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
-                  >
-                    <option value="employee">Empleado</option>
-                    <option value="admin">Administrador</option>
+                  <label>Tipo documento</label>
+                  <select value={workerForm.document_type} onChange={(e) => setWorkerForm({ ...workerForm, document_type: e.target.value })}>
+                    <option value="DNI">DNI</option>
+                    <option value="CE">CE</option>
+                    <option value="RUC">RUC</option>
+                    <option value="OTRO">Otro</option>
                   </select>
                 </div>
                 <div className="form-group">
+                  <label>Número documento</label>
+                  <input value={workerForm.document_number} onChange={(e) => setWorkerForm({ ...workerForm, document_number: e.target.value })} />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Email</label>
+                  <input type="email" value={workerForm.email} onChange={(e) => setWorkerForm({ ...workerForm, email: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label>Teléfono</label>
+                  <input value={workerForm.phone} onChange={(e) => setWorkerForm({ ...workerForm, phone: e.target.value })} />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Dirección</label>
+                  <input value={workerForm.address} onChange={(e) => setWorkerForm({ ...workerForm, address: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label>Fecha ingreso</label>
+                  <input type="date" value={workerForm.hire_date} onChange={(e) => setWorkerForm({ ...workerForm, hire_date: e.target.value })} />
+                </div>
+              </div>
+              {editingWorker && (
+                <div className="form-group">
                   <label>Estado</label>
-                  <select
-                    value={editForm.is_active ? '1' : '0'}
-                    onChange={(e) => setEditForm({ ...editForm, is_active: e.target.value === '1' })}
-                  >
+                  <select value={workerForm.is_active ? '1' : '0'} onChange={(e) => setWorkerForm({ ...workerForm, is_active: e.target.value === '1' })}>
                     <option value="1">Activo</option>
                     <option value="0">Inactivo</option>
                   </select>
                 </div>
-              </div>
-              {editForm.role === 'employee' && (
-                <div className="form-group">
-                  <label>Permisos por módulo</label>
-                  <div className="permissions-grid">
-                    {MODULES.filter((m) => m.key !== 'users').map((mod) => (
-                      <label key={mod.key} className="permission-checkbox">
-                        <input
-                          type="checkbox"
-                          checked={editPermissions[mod.key] !== false}
-                          onChange={(e) =>
-                            setEditPermissions({ ...editPermissions, [mod.key]: e.target.checked })
-                          }
-                        />
-                        {mod.label}
-                      </label>
-                    ))}
-                  </div>
-                </div>
               )}
               <div className="modal-actions">
-                <button type="button" className="btn-secondary" onClick={() => { setShowEditModal(false); setEditingUser(null); }}>
-                  Cancelar
-                </button>
-                <button type="submit" className="btn-primary" disabled={updateMutation.isLoading}>
-                  Guardar Cambios
-                </button>
+                <button type="button" className="btn-secondary" onClick={() => { setWorkerModal(false); setEditingWorker(null); }}>Cancelar</button>
+                <button type="submit" className="btn-primary" disabled={createWorkerMutation.isLoading || updateWorkerMutation.isLoading}>Guardar</button>
               </div>
             </form>
           </div>
         </div>
       )}
+
+      {profileModal && (
+        <div className="modal-overlay" onClick={() => { setProfileModal(false); setEditingProfile(null); }}>
+          <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
+            <h2>{editingProfile ? 'Editar Perfil' : 'Nuevo Perfil'}</h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!profileForm.name) return alert('Ingrese el nombre del perfil');
+                const payload = { ...profileForm };
+                if (profileForm.role === 'admin') {
+                  payload.permissions = MODULES.reduce<UserPermissions>((acc, mod) => ({ ...acc, [mod.key]: true }), {});
+                }
+                if (editingProfile) updateProfileMutation.mutate({ id: editingProfile.id, data: payload });
+                else createProfileMutation.mutate(payload);
+              }}
+            >
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Nombre del perfil *</label>
+                  <input value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} required />
+                </div>
+                <div className="form-group">
+                  <label>Tipo de acceso</label>
+                  <select value={profileForm.role} onChange={(e) => setProfileForm({ ...profileForm, role: e.target.value as 'admin' | 'employee' })}>
+                    <option value="employee">Empleado</option>
+                    <option value="admin">Administrador</option>
+                  </select>
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Descripción</label>
+                <textarea value={profileForm.description} onChange={(e) => setProfileForm({ ...profileForm, description: e.target.value })} rows={3} />
+              </div>
+              {editingProfile && (
+                <div className="form-group">
+                  <label>Estado</label>
+                  <select value={profileForm.is_active ? '1' : '0'} onChange={(e) => setProfileForm({ ...profileForm, is_active: e.target.value === '1' })}>
+                    <option value="1">Activo</option>
+                    <option value="0">Inactivo</option>
+                  </select>
+                </div>
+              )}
+              {profileForm.role === 'employee' && (
+                <PermissionsEditor
+                  permissions={profileForm.permissions || {}}
+                  onChange={(permissions) => setProfileForm({ ...profileForm, permissions })}
+                />
+              )}
+              <div className="modal-actions">
+                <button type="button" className="btn-secondary" onClick={() => { setProfileModal(false); setEditingProfile(null); }}>Cancelar</button>
+                <button type="submit" className="btn-primary" disabled={createProfileMutation.isLoading || updateProfileMutation.isLoading}>Guardar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PermissionsEditor({ permissions, onChange }: { permissions: UserPermissions; onChange: (permissions: UserPermissions) => void }) {
+  return (
+    <div className="form-group">
+      <label>Permisos por módulo</label>
+      <div className="permissions-grid">
+        {MODULES.filter((module) => module.key !== 'users').map((module) => (
+          <label key={module.key} className="permission-checkbox">
+            <input
+              type="checkbox"
+              checked={permissions[module.key] !== false}
+              onChange={(e) => onChange({ ...permissions, [module.key]: e.target.checked })}
+            />
+            {module.label}
+          </label>
+        ))}
+      </div>
     </div>
   );
 }

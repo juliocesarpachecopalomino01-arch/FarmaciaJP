@@ -1,4 +1,4 @@
-import api from './client';
+import api, { buildApiUrl } from './client';
 
 export interface CashRegister {
   id: number;
@@ -12,6 +12,8 @@ export interface CashRegister {
   total_sales?: number;
   total_amount?: number;
   cash_amount?: number;
+  cash_movements_amount?: number;
+  expected_cash_amount?: number;
   notes?: string | null;
   username?: string;
   full_name?: string;
@@ -20,6 +22,7 @@ export interface CashRegister {
 export interface CashRegisterSummary {
   total_sales: number;
   total_amount: number;
+  cash_movements_amount?: number;
   opening_balance: number;
   closing_balance: number | null;
   by_payment_method: Array<{
@@ -33,6 +36,22 @@ export interface CloseCashRegisterResponse {
   message: string;
   cash_register: CashRegister;
   summary: CashRegisterSummary;
+}
+
+export interface CashMovement {
+  id: number;
+  cash_register_id: number;
+  movement_type: string;
+  amount: number;
+  payment_method?: string | null;
+  payment_method_name?: string | null;
+  reference_type?: string | null;
+  reference_id?: number | null;
+  description?: string | null;
+  user_id?: number | null;
+  user_name?: string | null;
+  accounting_date?: string | null;
+  created_at: string;
 }
 
 export const cashRegistersApi = {
@@ -61,9 +80,49 @@ export const cashRegistersApi = {
     return response.data;
   },
 
-  getMovements: async (filters?: { cash_register_id?: number; start_date?: string; end_date?: string }) => {
-    const response = await api.get('/cash-registers/movements', { params: filters });
+  getMovements: async (filters?: {
+    cash_register_id?: number;
+    start_date?: string;
+    end_date?: string;
+    user_id?: number;
+    payment_method?: string;
+  }): Promise<CashMovement[]> => {
+    const response = await api.get<CashMovement[]>('/cash-registers/movements', { params: filters });
     return response.data;
   },
-};
 
+  exportMovementsExcel: async (filters?: {
+    start_date?: string;
+    end_date?: string;
+    user_id?: number;
+    payment_method?: string;
+    status?: string;
+  }): Promise<void> => {
+    const params = new URLSearchParams();
+    if (filters?.start_date) params.set('start_date', filters.start_date);
+    if (filters?.end_date) params.set('end_date', filters.end_date);
+    if (filters?.user_id) params.set('user_id', String(filters.user_id));
+    if (filters?.payment_method) params.set('payment_method', filters.payment_method);
+    if (filters?.status) params.set('status', filters.status);
+
+    const token = localStorage.getItem('token');
+    const query = params.toString();
+    const response = await fetch(buildApiUrl(`/export/cash-movements/excel${query ? `?${query}` : ''}`), {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+    if (!response.ok) {
+      throw new Error('Error al exportar movimientos de caja');
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `movimientos-caja-${new Date().toISOString().split('T')[0]}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  },
+};

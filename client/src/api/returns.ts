@@ -1,4 +1,4 @@
-import api from './client';
+import api, { buildApiUrl } from './client';
 
 export interface ReturnItem {
   sale_item_id: number;
@@ -59,5 +59,31 @@ export const returnsApi = {
   create: async (returnData: CreateReturnRequest): Promise<{ id: number; return_number: string; message: string }> => {
     const response = await api.post('/returns', returnData);
     return response.data;
+  },
+
+  exportExcel: async (filters?: { start_date?: string; end_date?: string }): Promise<void> => {
+    const params = new URLSearchParams();
+    if (filters?.start_date) params.set('start_date', filters.start_date);
+    if (filters?.end_date) params.set('end_date', filters.end_date);
+
+    const token = localStorage.getItem('token');
+    const query = params.toString();
+    const response = await fetch(buildApiUrl(`/export/returns/excel${query ? `?${query}` : ''}`), {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+    if (!response.ok) {
+      throw new Error('Error al exportar devoluciones');
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `devoluciones-${new Date().toISOString().split('T')[0]}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
   },
 };

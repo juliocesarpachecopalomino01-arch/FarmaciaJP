@@ -50,8 +50,10 @@ router.get('/expiring-soon', authenticateToken, [
          LEFT JOIN categories c ON p.category_id = c.id
          LEFT JOIN inventory i ON p.id = i.product_id
          WHERE p.is_active = 1
+         AND COALESCE(i.quantity, 0) > 0
          AND p.expiration_date IS NOT NULL
          AND p.expiration_date <= date('now', '+' || ? || ' days')
+         AND p.expiration_date >= date('now')
          ORDER BY p.expiration_date ASC`,
         [days, days],
         (err, products) => {
@@ -97,6 +99,7 @@ router.get('/expired', authenticateToken, (req: AuthRequest, res) => {
          LEFT JOIN categories c ON p.category_id = c.id
          LEFT JOIN inventory i ON p.id = i.product_id
          WHERE p.is_active = 1
+         AND COALESCE(i.quantity, 0) > 0
          AND p.expiration_date IS NOT NULL
          AND p.expiration_date < date('now')
          ORDER BY p.expiration_date ASC`,

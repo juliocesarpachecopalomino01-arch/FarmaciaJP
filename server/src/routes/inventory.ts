@@ -6,6 +6,42 @@ import * as XLSX from 'xlsx';
 
 const router = express.Router();
 
+type MovementRow = {
+  id: number;
+  product_id: number;
+  product_name: string;
+  barcode?: string;
+  movement_type: 'entry' | 'exit' | 'adjustment';
+  quantity: number;
+  reference_number?: string;
+  notes?: string;
+  user_name?: string;
+  created_at: string;
+};
+
+function applyMovementBalance(balance: number, movement: MovementRow) {
+  const quantity = Number(movement.quantity) || 0;
+  if (movement.movement_type === 'entry') return balance + quantity;
+  if (movement.movement_type === 'exit') return balance - quantity;
+  return balance - quantity;
+}
+
+function movementAmounts(previousBalance: number, movement: MovementRow) {
+  const quantity = Number(movement.quantity) || 0;
+  if (movement.movement_type === 'entry') {
+    return { entry: quantity, exit: 0, balance: previousBalance + quantity };
+  }
+  if (movement.movement_type === 'exit') {
+    return { entry: 0, exit: quantity, balance: previousBalance - quantity };
+  }
+
+  return {
+    entry: 0,
+    exit: quantity,
+    balance: previousBalance - quantity,
+  };
+}
+
 // Get all inventory items
 router.get('/', [
   query('low_stock').optional().isBoolean(),
@@ -59,7 +95,6 @@ router.get('/product/:productId', (req, res) => {
 
 // Update inventory stock levels
 router.put('/:id', authenticateToken, [
-  body('quantity').optional().isInt({ min: 0 }),
   body('min_stock').optional().isInt({ min: 0 }),
   body('max_stock').optional().isInt({ min: 0 }),
 ], (req: AuthRequest, res) => {
@@ -69,15 +104,11 @@ router.put('/:id', authenticateToken, [
   }
 
   const { id } = req.params;
-  const { quantity, min_stock, max_stock, location } = req.body;
+  const { min_stock, max_stock, location } = req.body;
 
   const updates: string[] = [];
   const params: any[] = [];
 
-  if (quantity !== undefined) {
-    updates.push('quantity = ?');
-    params.push(quantity);
-  }
   if (min_stock !== undefined) {
     updates.push('min_stock = ?');
     params.push(min_stock);
@@ -112,8 +143,9 @@ router.put('/:id', authenticateToken, [
 // Add inventory movement (entry/exit/adjustment)
 router.post('/movement', authenticateToken, [
   body('product_id').isInt().withMessage('Product ID is required'),
-  body('movement_type').isIn(['entry', 'exit', 'adjustment']).withMessage('Invalid movement type'),
-  body('quantity').isInt().withMessage('Quantity is required'),
+  body('movement_type').isIn(['adjustment']).withMessage('Solo se permiten ajustes manuales desde inventario'),
+  body('quantity').isInt({ min: 1 }).withMessage('La cantidad faltante debe ser mayor a cero'),
+  body('notes').trim().notEmpty().withMessage('El motivo del ajuste es obligatorio'),
 ], (req: AuthRequest, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -142,12 +174,12 @@ router.post('/movement', authenticateToken, [
     if (movement_type === 'entry') {
       newQuantity += quantity;
     } else if (movement_type === 'exit') {
+      return res.status(400).json({ error: 'Las salidas se registran desde ventas, no desde movimientos manuales' });
+    } else if (movement_type === 'adjustment') {
       newQuantity -= quantity;
       if (newQuantity < 0) {
-        return res.status(400).json({ error: 'Insufficient stock' });
+        return res.status(400).json({ error: 'El ajuste no puede descontar mas stock del disponible' });
       }
-    } else if (movement_type === 'adjustment') {
-      newQuantity = quantity;
     }
 
     // Update inventory
@@ -160,10 +192,11 @@ router.post('/movement', authenticateToken, [
         }
 
         // Record movement
+        const adjustmentReference = reference_number || `AJU-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
         db.run(
           `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, notes, user_id)
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [product_id, movement_type, quantity, reference_number || null, notes || null, req.user?.id || null],
+          [product_id, movement_type, quantity, adjustmentReference, notes || null, req.user?.id || null],
           function(err) {
             if (err) {
               return res.status(500).json({ error: 'Database error' });
@@ -171,6 +204,7 @@ router.post('/movement', authenticateToken, [
             res.status(201).json({
               id: this.lastID,
               new_quantity: newQuantity,
+              reference_number: adjustmentReference,
               message: 'Inventory movement recorded successfully',
             });
           }
@@ -191,9 +225,10 @@ router.get('/movements', [
 
   let query = `
     SELECT im.*, p.name as product_name, p.barcode,
-           u.username as user_name
+           c.name as category_name, u.full_name as user_name
     FROM inventory_movements im
     INNER JOIN products p ON im.product_id = p.id
+    LEFT JOIN categories c ON p.category_id = c.id
     LEFT JOIN users u ON im.user_id = u.id
     WHERE 1=1
   `;
@@ -219,7 +254,7 @@ router.get('/movements', [
     params.push(end_date);
   }
 
-  query += ' ORDER BY im.created_at DESC LIMIT 100';
+  query += ' ORDER BY im.created_at DESC LIMIT 500';
 
   db.all(query, params, (err, movements) => {
     if (err) {
@@ -227,6 +262,97 @@ router.get('/movements', [
     }
     res.json(movements);
   });
+});
+
+router.get('/kardex/:productId', [
+  query('start_date').optional(),
+  query('end_date').optional(),
+], (req, res) => {
+  const { productId } = req.params;
+  const { start_date, end_date } = req.query;
+
+  db.get(
+    `SELECT p.id, p.name, p.barcode, p.unit_price, p.is_active,
+            COALESCE(i.quantity, 0) as current_stock
+     FROM products p
+     LEFT JOIN inventory i ON p.id = i.product_id
+     WHERE p.id = ?`,
+    [productId],
+    (productErr, product: any) => {
+      if (productErr) return res.status(500).json({ error: 'Database error' });
+      if (!product) return res.status(404).json({ error: 'Product not found' });
+
+      db.all(
+        `SELECT im.*, p.name as product_name, p.barcode, u.full_name as user_name
+         FROM inventory_movements im
+         INNER JOIN products p ON im.product_id = p.id
+         LEFT JOIN users u ON im.user_id = u.id
+         WHERE im.product_id = ?
+         ORDER BY im.created_at ASC, im.id ASC`,
+        [productId],
+        (movementsErr, movements: MovementRow[]) => {
+          if (movementsErr) return res.status(500).json({ error: 'Database error' });
+
+          const rows = movements || [];
+          let computedFinalBalance = 0;
+          rows.forEach((movement) => {
+            computedFinalBalance = applyMovementBalance(computedFinalBalance, movement);
+          });
+
+          const currentStock = Number(product.current_stock) || 0;
+          const hasAdjustment = rows.some((movement) => movement.movement_type === 'adjustment');
+          const openingOffset = hasAdjustment ? 0 : currentStock - computedFinalBalance;
+          let runningBalance = openingOffset;
+          let openingBalance = openingOffset;
+
+          const startDate = start_date ? String(start_date) : null;
+          const endDate = end_date ? String(end_date) : null;
+          const kardex: any[] = [];
+          let totalEntry = 0;
+          let totalExit = 0;
+
+          rows.forEach((movement) => {
+            const movementDate = String(movement.created_at).slice(0, 10);
+            const amounts = movementAmounts(runningBalance, movement);
+            runningBalance = amounts.balance;
+
+            const isBeforeStart = startDate && movementDate < startDate;
+            const isAfterEnd = endDate && movementDate > endDate;
+
+            if (isBeforeStart) {
+              openingBalance = runningBalance;
+              return;
+            }
+            if (isAfterEnd) return;
+
+            totalEntry += amounts.entry;
+            totalExit += amounts.exit;
+            kardex.push({
+              id: movement.id,
+              created_at: movement.created_at,
+              movement_type: movement.movement_type,
+              reference_number: movement.reference_number,
+              notes: movement.notes,
+              user_name: movement.user_name,
+              quantity: Number(movement.quantity) || 0,
+              entry_quantity: amounts.entry,
+              exit_quantity: amounts.exit,
+              balance: runningBalance,
+            });
+          });
+
+          res.json({
+            product,
+            opening_balance: openingBalance,
+            total_entry: totalEntry,
+            total_exit: totalExit,
+            closing_balance: kardex.length > 0 ? kardex[kardex.length - 1].balance : openingBalance,
+            movements: kardex,
+          });
+        }
+      );
+    }
+  );
 });
 
 // Download Excel template for inventory import
@@ -287,6 +413,7 @@ router.post('/import', authenticateToken, [
   const { file_data } = req.body as { file_data: string };
 
   try {
+    const importReference = `CI-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
     // Decode base64 file data
     const buffer = Buffer.from(file_data, 'base64');
     const workbook = XLSX.read(buffer, { type: 'buffer' });
@@ -384,8 +511,8 @@ router.post('/import', authenticateToken, [
                   }
                   // Record movement as "entry" for audit
                   db.run(
-                    'INSERT INTO inventory_movements (product_id, movement_type, quantity, notes, user_id) VALUES (?, ?, ?, ?, ?)',
-                    [product_id, 'entry', quantityToAdd, 'Importación masiva desde Excel', req.user?.id || null],
+                    'INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, notes, user_id) VALUES (?, ?, ?, ?, ?, ?)',
+                    [product_id, 'entry', quantityToAdd, importReference, 'Carga inicial desde Excel', req.user?.id || null],
                     () => {
                       results.success++;
                       resolve();
@@ -401,10 +528,17 @@ router.post('/import', authenticateToken, [
                 function(insertErr) {
                   if (insertErr) {
                     results.errors.push(`Fila ${rowNum}: Error al insertar inventario - ${insertErr.message}`);
+                    resolve();
                   } else {
-                    results.success++;
+                    db.run(
+                      'INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, notes, user_id) VALUES (?, ?, ?, ?, ?, ?)',
+                      [product_id, 'entry', Math.max(0, quantity), importReference, 'Carga inicial desde Excel', req.user?.id || null],
+                      () => {
+                        results.success++;
+                        resolve();
+                      }
+                    );
                   }
-                  resolve();
                 }
               );
             }
@@ -418,7 +552,7 @@ router.post('/import', authenticateToken, [
       for (let i = 0; i < data.length; i++) {
         await processRow(data[i], i);
       }
-      res.json(results);
+      res.json({ ...results, reference_number: importReference });
     })();
   } catch (error: any) {
     return res.status(400).json({ error: 'Error al procesar el archivo Excel', details: error.message });

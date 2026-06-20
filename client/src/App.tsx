@@ -17,8 +17,12 @@ import Returns from './pages/Returns';
 import Suppliers from './pages/Suppliers';
 import Purchases from './pages/Purchases';
 import ScanQR from './pages/ScanQR';
+import PaymentMethods from './pages/PaymentMethods';
+import CompanySettingsPage from './pages/CompanySettings';
 import ProductQRPublic from './pages/ProductQRPublic';
+import ProductMovementsReport from './pages/ProductMovementsReport';
 import Layout from './components/Layout';
+import './styles/compact-theme.css';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -47,10 +51,13 @@ function App() {
           <Route index element={<ModuleGuard><Dashboard /></ModuleGuard>} />
           <Route path="products" element={<ModuleGuard><Products /></ModuleGuard>} />
           <Route path="categories" element={<ModuleGuard><Categories /></ModuleGuard>} />
+          <Route path="payment-methods" element={<ModuleGuard><PaymentMethods /></ModuleGuard>} />
+          <Route path="company-settings" element={<ModuleGuard><CompanySettingsPage /></ModuleGuard>} />
           <Route path="inventory" element={<ModuleGuard><Inventory /></ModuleGuard>} />
           <Route path="sales" element={<ModuleGuard><Sales /></ModuleGuard>} />
           <Route path="cash-register" element={<ModuleGuard><CashRegisterPage /></ModuleGuard>} />
           <Route path="cash-movements" element={<ModuleGuard><CashMovements /></ModuleGuard>} />
+          <Route path="product-movements" element={<ModuleGuard><ProductMovementsReport /></ModuleGuard>} />
           <Route path="alerts" element={<ModuleGuard><Alerts /></ModuleGuard>} />
           <Route path="customers" element={<ModuleGuard><Customers /></ModuleGuard>} />
           <Route path="reports" element={<ModuleGuard><Reports /></ModuleGuard>} />

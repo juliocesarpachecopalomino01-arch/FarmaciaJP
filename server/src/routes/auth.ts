@@ -14,12 +14,26 @@ function getUserPermissions(userId: number, role: string): Promise<string[]> {
       return resolve([...MODULE_KEYS]);
     }
     db.all(
-      'SELECT module_key FROM user_module_permissions WHERE user_id = ? AND can_access = 1',
+      `SELECT module_key
+       FROM user_module_permissions
+       WHERE user_id = ? AND can_access = 1`,
       [userId],
       (err, rows: { module_key: string }[]) => {
         if (err) return resolve([]);
         if (!rows || rows.length === 0) {
-          return resolve([...MODULE_KEYS]);
+          db.all(
+            `SELECT pmp.module_key
+             FROM users u
+             INNER JOIN profile_module_permissions pmp ON pmp.profile_id = u.profile_id
+             WHERE u.id = ? AND pmp.can_access = 1`,
+            [userId],
+            (profileErr, profileRows: { module_key: string }[]) => {
+              if (profileErr) return resolve([]);
+              if (!profileRows || profileRows.length === 0) return resolve([...MODULE_KEYS]);
+              resolve(profileRows.map((r) => r.module_key));
+            }
+          );
+          return;
         }
         resolve(rows.map((r) => r.module_key));
       }

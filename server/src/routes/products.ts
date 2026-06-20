@@ -125,6 +125,8 @@ router.get('/import/template', authenticateToken, (_req, res) => {
         'Código de Barras': '',
         'Categoría': 'Medicamentos',
         'Precio de Costo': 3.00,
+        'Tiene Bono': 'No',
+        'Bono por Unidad': 0,
         'Requiere Receta': 'No',
         'Fecha de Vencimiento': '2026-12-31',
       },
@@ -135,6 +137,8 @@ router.get('/import/template', authenticateToken, (_req, res) => {
         'Código de Barras': '7891234567890',
         'Categoría': 'Medicamentos',
         'Precio de Costo': 4.50,
+        'Tiene Bono': 'Si',
+        'Bono por Unidad': 0.50,
         'Requiere Receta': 'No',
         'Fecha de Vencimiento': '2026-06-15',
       },
@@ -152,6 +156,8 @@ router.get('/import/template', authenticateToken, (_req, res) => {
       { wch: 18 },
       { wch: 20 },
       { wch: 14 },
+      { wch: 14 },
+      { wch: 16 },
       { wch: 18 },
       { wch: 22 },
     ];
@@ -377,6 +383,8 @@ router.post('/', authenticateToken, [
     category_id,
     unit_price,
     cost_price,
+    has_sales_bonus = false,
+    sales_bonus_per_unit = 0,
     requires_prescription = false,
     expiration_date,
   } = req.body;
@@ -404,13 +412,13 @@ router.post('/', authenticateToken, [
     let insertParams: any[];
 
     if (hasExpirationDate) {
-      insertQuery = `INSERT INTO products (name, description, barcode, category_id, unit_price, cost_price, requires_prescription, expiration_date)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
-      insertParams = [name, description || null, finalBarcode, category_id || null, unit_price, cost_price || null, requires_prescription ? 1 : 0, expiration_date || null];
+      insertQuery = `INSERT INTO products (name, description, barcode, category_id, unit_price, cost_price, has_sales_bonus, sales_bonus_per_unit, requires_prescription, expiration_date)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      insertParams = [name, description || null, finalBarcode, category_id || null, unit_price, cost_price || null, has_sales_bonus ? 1 : 0, Number(sales_bonus_per_unit) || 0, requires_prescription ? 1 : 0, expiration_date || null];
     } else {
-      insertQuery = `INSERT INTO products (name, description, barcode, category_id, unit_price, cost_price, requires_prescription)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)`;
-      insertParams = [name, description || null, finalBarcode, category_id || null, unit_price, cost_price || null, requires_prescription ? 1 : 0];
+      insertQuery = `INSERT INTO products (name, description, barcode, category_id, unit_price, cost_price, has_sales_bonus, sales_bonus_per_unit, requires_prescription)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      insertParams = [name, description || null, finalBarcode, category_id || null, unit_price, cost_price || null, has_sales_bonus ? 1 : 0, Number(sales_bonus_per_unit) || 0, requires_prescription ? 1 : 0];
     }
 
     db.run(
@@ -471,6 +479,8 @@ router.put('/:id', authenticateToken, [
     category_id,
     unit_price,
     cost_price,
+    has_sales_bonus,
+    sales_bonus_per_unit,
     requires_prescription,
     expiration_date,
     is_active,
@@ -502,6 +512,14 @@ router.put('/:id', authenticateToken, [
   if (cost_price !== undefined) {
     updates.push('cost_price = ?');
     params.push(cost_price);
+  }
+  if (has_sales_bonus !== undefined) {
+    updates.push('has_sales_bonus = ?');
+    params.push(has_sales_bonus ? 1 : 0);
+  }
+  if (sales_bonus_per_unit !== undefined) {
+    updates.push('sales_bonus_per_unit = ?');
+    params.push(Number(sales_bonus_per_unit) || 0);
   }
   if (requires_prescription !== undefined) {
     updates.push('requires_prescription = ?');
@@ -709,18 +727,21 @@ router.post('/import', authenticateToken, [
           return;
         }
 
-        const description = row['Descripción'] || row['description'] || row['Description'] || null;
-        let barcode = row['Código de Barras'] || row['Código'] || row['barcode'] || row['Barcode'] || null;
+        const description = row['Descripción'] || row['Descripci\u00c3\u00b3n'] || row['description'] || row['Description'] || null;
+        let barcode = row['Código de Barras'] || row['C\u00c3\u00b3digo de Barras'] || row['Código'] || row['C\u00c3\u00b3digo'] || row['barcode'] || row['Barcode'] || null;
         // Generate unique barcode if not provided
         if (!barcode) {
           const timestamp = Date.now();
           const randomStr = crypto.randomBytes(4).toString('hex').toUpperCase();
           barcode = `PROD${timestamp}${randomStr}`;
         }
-        const category_name = row['Categoría'] || row['category'] || row['Category'] || null;
+        const category_name = row['Categoría'] || row['Categor\u00c3\u00ada'] || row['category'] || row['Category'] || null;
         const cost_priceRaw = row['Precio de Costo'] ?? row['Costo'] ?? row['cost_price'] ?? row['Cost Price'] ?? null;
         const cost_price = cost_priceRaw != null && cost_priceRaw !== '' ? parseFloat(cost_priceRaw) : null;
-        const requires_prescription = row['Requiere Receta'] === 'Sí' || row['Requiere Receta'] === 'Si' || row['Requiere Receta'] === 1 || row['requires_prescription'] === true || false;
+        const has_sales_bonus = row['Tiene Bono'] === 'Sí' || row['Tiene Bono'] === 'Si' || row['Tiene Bono'] === 'si' || row['Tiene Bono'] === 1 || row['has_sales_bonus'] === true;
+        const salesBonusRaw = row['Bono por Unidad'] ?? row['Bono'] ?? row['sales_bonus_per_unit'] ?? 0;
+        const sales_bonus_per_unit = salesBonusRaw != null && salesBonusRaw !== '' ? parseFloat(salesBonusRaw) : 0;
+        const requires_prescription = row['Requiere Receta'] === 'Sí' || row['Requiere Receta'] === 'S\u00c3\u00ad' || row['Requiere Receta'] === 'Si' || row['Requiere Receta'] === 1 || row['requires_prescription'] === true || false;
         const expiration_date = parseExcelDate(
           row['Fecha de Vencimiento'] ?? row['expiration_date'] ?? row['Expiration Date'] ?? row['Vencimiento']
         );
@@ -770,9 +791,9 @@ router.post('/import', authenticateToken, [
             } else {
               // Insert product
               db.run(
-                `INSERT INTO products (name, description, barcode, category_id, unit_price, cost_price, requires_prescription, expiration_date, is_active)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-                [name, description, barcode, category_id, unit_price, cost_price != null && !isNaN(cost_price) ? cost_price : null, requires_prescription ? 1 : 0, expiration_date || null],
+                `INSERT INTO products (name, description, barcode, category_id, unit_price, cost_price, has_sales_bonus, sales_bonus_per_unit, requires_prescription, expiration_date, is_active)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+                [name, description, barcode, category_id, unit_price, cost_price != null && !isNaN(cost_price) ? cost_price : null, has_sales_bonus ? 1 : 0, has_sales_bonus && !isNaN(sales_bonus_per_unit) ? sales_bonus_per_unit : 0, requires_prescription ? 1 : 0, expiration_date || null],
                 function(this: { lastID: number }, insertErr) {
                   if (insertErr) {
                     results.errors.push(`Fila ${rowNum}: Error al insertar producto - ${insertErr.message}`);
@@ -804,3 +825,4 @@ router.post('/import', authenticateToken, [
 });
 
 export default router;
+

@@ -3,9 +3,17 @@ import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { useSearchParams } from 'react-router-dom';
 import { returnsApi, CreateReturnRequest } from '../api/returns';
 import { salesApi } from '../api/sales';
-import { Plus, RotateCcw } from 'lucide-react';
+import { Download, Filter, Plus, RotateCcw } from 'lucide-react';
 import { format } from 'date-fns';
 import './Returns.css';
+
+const getToday = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 export default function Returns() {
   const [searchParams] = useSearchParams();
@@ -18,12 +26,16 @@ export default function Returns() {
     notes: '',
     password: '',
   });
+  const [filters, setFilters] = useState({
+    start_date: getToday(),
+    end_date: getToday(),
+  });
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [pendingReturnData, setPendingReturnData] = useState<CreateReturnRequest | null>(null);
 
   const queryClient = useQueryClient();
 
-  const { data: returnsData } = useQuery('returns', () => returnsApi.getAll());
+  const { data: returnsData } = useQuery(['returns', filters], () => returnsApi.getAll(filters));
   const { data: salesData } = useQuery('sales-available-return', () => salesApi.getAvailableForReturn());
   const { data: selectedSale } = useQuery(
     ['sale', selectedSaleId],
@@ -128,6 +140,14 @@ export default function Returns() {
 
   const returns = returnsData || [];
 
+  const handleExportReturns = async () => {
+    try {
+      await returnsApi.exportExcel(filters);
+    } catch (error) {
+      alert('No se pudo exportar el reporte de devoluciones.');
+    }
+  };
+
   return (
     <div className="page-container">
       <div className="page-header">
@@ -135,10 +155,41 @@ export default function Returns() {
           <h1>Devoluciones</h1>
           <p>Gestión de devoluciones y reembolsos</p>
         </div>
-        <button className="btn-primary" onClick={() => { setSelectedSaleId(null); setShowModal(true); }}>
-          <Plus size={20} />
-          Nueva Devolución
-        </button>
+        <div className="header-actions">
+          <button className="btn-secondary" onClick={handleExportReturns}>
+            <Download size={20} />
+            Exportar Excel
+          </button>
+          <button className="btn-primary" onClick={() => { setSelectedSaleId(null); setShowModal(true); }}>
+            <Plus size={20} />
+            Nueva Devolución
+          </button>
+        </div>
+      </div>
+
+      <div className="filters-container returns-filters">
+        <div className="filters-header">
+          <Filter size={20} />
+          <span>Filtros</span>
+        </div>
+        <div className="filters-grid">
+          <div className="form-group">
+            <label>Desde</label>
+            <input
+              type="date"
+              value={filters.start_date}
+              onChange={(e) => setFilters({ ...filters, start_date: e.target.value })}
+            />
+          </div>
+          <div className="form-group">
+            <label>Hasta</label>
+            <input
+              type="date"
+              value={filters.end_date}
+              onChange={(e) => setFilters({ ...filters, end_date: e.target.value })}
+            />
+          </div>
+        </div>
       </div>
 
       <div className="table-container">

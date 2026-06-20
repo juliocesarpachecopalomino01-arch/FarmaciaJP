@@ -9,6 +9,15 @@ const router = express.Router();
 // Password for cash register audit (can be set via env or use admin password)
 const AUDIT_PASSWORD = process.env.AUDIT_PASSWORD || 'admin123';
 
+function getCompanyPassword(field: 'cash_reopen_password' | 'return_password', fallback: string): Promise<string> {
+  return new Promise((resolve) => {
+    db.get(`SELECT ${field} as password FROM company_settings WHERE id = 1`, [], (err, row: any) => {
+      if (err || !row?.password) return resolve(fallback);
+      resolve(String(row.password));
+    });
+  });
+}
+
 function getPeruDateParts() {
   const now = new Date();
   const peruDateString = now.toLocaleString('en-US', {
@@ -78,19 +87,29 @@ router.get('/', authenticateToken, [
       u.full_name,
       COALESCE(agg.total_sales, 0) as total_sales,
       COALESCE(agg.total_amount, 0) as total_amount,
-      COALESCE(agg.cash_amount, 0) as cash_amount
+      COALESCE(agg.cash_amount, 0) as cash_amount,
+      COALESCE(cmagg.cash_movements_amount, 0) as cash_movements_amount,
+      (COALESCE(agg.cash_amount, 0) + COALESCE(cmagg.cash_movements_amount, 0)) as expected_cash_amount
     FROM cash_registers cr
     INNER JOIN users u ON cr.user_id = u.id
     LEFT JOIN (
       SELECT 
         cash_register_id,
         COUNT(*) as total_sales,
-        COALESCE(SUM(final_amount), 0) as total_amount,
-        COALESCE(SUM(CASE WHEN payment_method = 'cash' THEN final_amount ELSE 0 END), 0) as cash_amount
-      FROM sales
-      WHERE (status != 'returned' OR status IS NULL)
+        COALESCE(SUM(s.final_amount), 0) as total_amount,
+        COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN s.payment_method = 'cash' THEN 1 ELSE 0 END) = 1 THEN s.final_amount ELSE 0 END), 0) as cash_amount
+      FROM sales s
+      LEFT JOIN payment_methods pm ON pm.value = s.payment_method
+      WHERE (s.status != 'returned' OR s.status IS NULL)
       GROUP BY cash_register_id
     ) agg ON cr.id = agg.cash_register_id
+    LEFT JOIN (
+      SELECT
+        cash_register_id,
+        COALESCE(SUM(amount), 0) as cash_movements_amount
+      FROM cash_movements
+      GROUP BY cash_register_id
+    ) cmagg ON cr.id = cmagg.cash_register_id
     WHERE 1=1
   `;
 
@@ -230,12 +249,13 @@ router.post('/close', authenticateToken, [
 
       // Aggregate sales for this cash register
       db.all(
-        `SELECT payment_method, COUNT(*) as count, COALESCE(SUM(final_amount), 0) as total
-         FROM sales
-         WHERE user_id = ? 
-           AND cash_register_id = ?
-           AND (status != 'returned' OR status IS NULL)
-         GROUP BY payment_method`,
+        `SELECT COALESCE(pm.name, s.payment_method) as payment_method, COUNT(*) as count, COALESCE(SUM(s.final_amount), 0) as total
+         FROM sales s
+         LEFT JOIN payment_methods pm ON pm.value = s.payment_method
+         WHERE s.user_id = ? 
+           AND s.cash_register_id = ?
+           AND (s.status != 'returned' OR s.status IS NULL)
+         GROUP BY s.payment_method, pm.name`,
         [userId, session.id],
         (aggErr, rows: any[]) => {
           if (aggErr) {
@@ -246,61 +266,76 @@ router.post('/close', authenticateToken, [
           const totalSales = rows.reduce((sum, r) => sum + (r.count || 0), 0);
           const totalAmount = rows.reduce((sum, r) => sum + (r.total || 0), 0);
 
-          const { dateTime } = getPeruDateParts();
-
-          db.run(
-            `UPDATE cash_registers
-             SET 
-               closed_at = ?,
-               closing_balance = ?,
-               status = 'closed',
-               total_sales = ?,
-               total_amount = ?,
-               notes = COALESCE(?, notes)
-             WHERE id = ?`,
-            [
-              dateTime,
-              typeof closing_balance === 'number' ? closing_balance : null,
-              totalSales,
-              totalAmount,
-              notes || null,
-              session.id,
-            ],
-            (updateErr) => {
-              if (updateErr) {
-                console.error('Error closing cash register:', updateErr);
+          db.get(
+            `SELECT COALESCE(SUM(amount), 0) as cash_movements_amount
+             FROM cash_movements
+             WHERE cash_register_id = ?`,
+            [session.id],
+            (movErr, movementRow: any) => {
+              if (movErr) {
+                console.error('Error aggregating cash movements for cash register:', movErr);
                 return res.status(500).json({ error: 'Database error' });
               }
 
-              const summary = {
-                total_sales: totalSales,
-                total_amount: totalAmount,
-                opening_balance: session.opening_balance || 0,
-                closing_balance: typeof closing_balance === 'number' ? closing_balance : null,
-                by_payment_method: rows.map((r) => ({
-                  payment_method: r.payment_method,
-                  count: r.count || 0,
-                  total: r.total || 0,
-                })),
-              };
+              const cashMovementsAmount = Number(movementRow?.cash_movements_amount || 0);
+              const { dateTime } = getPeruDateParts();
 
-              db.get(
-                `SELECT cr.*, u.username, u.full_name
-                 FROM cash_registers cr
-                 INNER JOIN users u ON cr.user_id = u.id
-                 WHERE cr.id = ?`,
-                [session.id],
-                (fetchErr, updated) => {
-                  if (fetchErr) {
-                    console.error('Error fetching closed cash register:', fetchErr);
+              db.run(
+                `UPDATE cash_registers
+                 SET 
+                   closed_at = ?,
+                   closing_balance = ?,
+                   status = 'closed',
+                   total_sales = ?,
+                   total_amount = ?,
+                   notes = COALESCE(?, notes)
+                 WHERE id = ?`,
+                [
+                  dateTime,
+                  typeof closing_balance === 'number' ? closing_balance : null,
+                  totalSales,
+                  totalAmount,
+                  notes || null,
+                  session.id,
+                ],
+                (updateErr) => {
+                  if (updateErr) {
+                    console.error('Error closing cash register:', updateErr);
                     return res.status(500).json({ error: 'Database error' });
                   }
 
-                  res.json({
-                    message: 'Caja cerrada correctamente',
-                    cash_register: updated,
-                    summary,
-                  });
+                  const summary = {
+                    total_sales: totalSales,
+                    total_amount: totalAmount,
+                    cash_movements_amount: cashMovementsAmount,
+                    opening_balance: session.opening_balance || 0,
+                    closing_balance: typeof closing_balance === 'number' ? closing_balance : null,
+                    by_payment_method: rows.map((r) => ({
+                      payment_method: r.payment_method,
+                      count: r.count || 0,
+                      total: r.total || 0,
+                    })),
+                  };
+
+                  db.get(
+                    `SELECT cr.*, u.username, u.full_name
+                     FROM cash_registers cr
+                     INNER JOIN users u ON cr.user_id = u.id
+                     WHERE cr.id = ?`,
+                    [session.id],
+                    (fetchErr, updated) => {
+                      if (fetchErr) {
+                        console.error('Error fetching closed cash register:', fetchErr);
+                        return res.status(500).json({ error: 'Database error' });
+                      }
+
+                      res.json({
+                        message: 'Caja cerrada correctamente',
+                        cash_register: updated,
+                        summary,
+                      });
+                    }
+                  );
                 }
               );
             }
@@ -316,15 +351,24 @@ router.get('/movements', authenticateToken, [
   query('cash_register_id').optional().isInt(),
   query('start_date').optional(),
   query('end_date').optional(),
+  query('user_id').optional().isInt(),
+  query('payment_method').optional().isString(),
 ], (req: AuthRequest, res: Response) => {
-  const { cash_register_id, start_date, end_date } = req.query as { cash_register_id?: string; start_date?: string; end_date?: string };
+  const { cash_register_id, start_date, end_date, user_id, payment_method } = req.query as {
+    cash_register_id?: string;
+    start_date?: string;
+    end_date?: string;
+    user_id?: string;
+    payment_method?: string;
+  };
   const isAdmin = req.user?.role === 'admin';
 
   let querySql = `
-    SELECT cm.*, u.username as user_name, cr.accounting_date
+    SELECT cm.*, COALESCE(pm.name, cm.payment_method) as payment_method_name, u.username as user_name, cr.accounting_date
     FROM cash_movements cm
     INNER JOIN cash_registers cr ON cm.cash_register_id = cr.id
     LEFT JOIN users u ON cm.user_id = u.id
+    LEFT JOIN payment_methods pm ON pm.value = cm.payment_method
     WHERE 1=1
   `;
   const params: any[] = [];
@@ -336,14 +380,21 @@ router.get('/movements', authenticateToken, [
   if (!isAdmin) {
     querySql += ' AND cr.user_id = ?';
     params.push(req.user!.id);
+  } else if (user_id) {
+    querySql += ' AND cr.user_id = ?';
+    params.push(Number(user_id));
   }
   if (start_date) {
-    querySql += ' AND DATE(cm.created_at) >= ?';
+    querySql += ' AND cr.accounting_date >= ?';
     params.push(start_date);
   }
   if (end_date) {
-    querySql += ' AND DATE(cm.created_at) <= ?';
+    querySql += ' AND cr.accounting_date <= ?';
     params.push(end_date);
+  }
+  if (payment_method) {
+    querySql += ' AND cm.payment_method = ?';
+    params.push(payment_method);
   }
 
   querySql += ' ORDER BY cm.created_at DESC LIMIT 500';
@@ -377,11 +428,15 @@ router.post('/audit/open', authenticateToken, [
   };
   const userId = req.user!.id;
 
-  // Verify password
-  const validPassword = password === AUDIT_PASSWORD;
-  const isAdmin = req.user?.role === 'admin';
-  if (!validPassword) {
-    // Allow admin to use their own password as alternative
+  getCompanyPassword('cash_reopen_password', AUDIT_PASSWORD).then((configuredPassword) => {
+    const validPassword = password === configuredPassword;
+    const isAdmin = req.user?.role === 'admin';
+    if (validPassword) {
+      proceedWithAuditOpen();
+      return;
+    }
+
+    // Allow admin to use their own password as alternative.
     if (!isAdmin) {
       return res.status(403).json({ error: 'Contraseña incorrecta' });
     }
@@ -395,10 +450,7 @@ router.post('/audit/open', authenticateToken, [
       }
       proceedWithAuditOpen();
     });
-    return;
-  }
-
-  proceedWithAuditOpen();
+  });
 
   function proceedWithAuditOpen() {
     if (!cash_register_id && !accounting_date) {

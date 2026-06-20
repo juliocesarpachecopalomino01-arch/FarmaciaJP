@@ -1,27 +1,16 @@
-import { useMemo, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from 'react-query';
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from 'react-query';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { Printer, Trash2, Filter, ShoppingBag } from 'lucide-react';
+import { Printer, Filter, ShoppingBag, Download, RotateCcw } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { salesApi, Sale } from '../api/sales';
 import { usersApi } from '../api/users';
-import { cashRegistersApi } from '../api/cashRegisters';
-import { buildApiUrl } from '../api/client';
+import { cashRegistersApi, CashMovement } from '../api/cashRegisters';
+import { paymentMethodsApi } from '../api/paymentMethods';
+import { printReceipt } from '../utils/printReceipt';
 import './Sales.css';
 import './CashMovements.css';
-
-type CashMovement = {
-  id: number;
-  cash_register_id: number;
-  movement_type: string;
-  amount: number;
-  reference_type?: string;
-  reference_id?: number;
-  description?: string;
-  user_name?: string;
-  created_at: string;
-};
 
 type Filters = {
   start_date?: string;
@@ -31,20 +20,49 @@ type Filters = {
   status?: string;
 };
 
+function getPeruDateString() {
+  const now = new Date();
+  const peruDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Lima' }));
+  return peruDate.toISOString().slice(0, 10);
+}
+
+function formatAccountingDate(value?: string | null) {
+  if (!value) return '-';
+  const [datePart] = value.split('T');
+  const [year, month, day] = datePart.split('-');
+  if (!year || !month || !day) return value;
+  return `${day}/${month}/${year}`;
+}
+
+function formatPeruDateTime(value: string) {
+  const date = new Date(value);
+  const peruDate = new Date(date.toLocaleString('en-US', { timeZone: 'America/Lima' }));
+  return format(peruDate, 'dd/MM/yyyy HH:mm', { locale: es });
+}
+
+function formatCurrency(value: number) {
+  return `S/ ${value.toFixed(2)}`;
+}
+
 export default function CashMovements() {
-  const queryClient = useQueryClient();
   const { user } = useAuth();
-
-  const getPeruDate = () => {
-    const now = new Date();
-    return new Date(now.toLocaleString('en-US', { timeZone: 'America/Lima' }));
-  };
-
   const [filters, setFilters] = useState<Filters>(() => {
-    const today = getPeruDate();
-    const dateStr = today.toISOString().slice(0, 10);
+    const dateStr = getPeruDateString();
     return { start_date: dateStr, end_date: dateStr };
   });
+
+  const { data: currentCashRegister } = useQuery('cash-register-current', cashRegistersApi.getCurrent);
+
+  useEffect(() => {
+    if (!currentCashRegister?.accounting_date) return;
+    const accountingDate = currentCashRegister.accounting_date.split('T')[0];
+
+    setFilters((currentFilters) => ({
+      ...currentFilters,
+      start_date: accountingDate,
+      end_date: accountingDate,
+    }));
+  }, [currentCashRegister?.accounting_date]);
 
   const { data: salesData, isLoading } = useQuery(
     ['cash-movements-sales', filters],
@@ -58,32 +76,54 @@ export default function CashMovements() {
 
   const { data: cashMovements = [] } = useQuery<CashMovement[]>(
     ['cash-movements-extra', filters],
-    () => cashRegistersApi.getMovements({ start_date: filters.start_date, end_date: filters.end_date })
+    () =>
+      cashRegistersApi.getMovements({
+        start_date: filters.start_date,
+        end_date: filters.end_date,
+        user_id: filters.user_id,
+        payment_method: filters.payment_method,
+      })
   );
 
-  const cancelSaleMutation = useMutation(salesApi.cancel, {
-    onSuccess: () => {
-      queryClient.invalidateQueries(['cash-movements-sales']);
-      queryClient.invalidateQueries('inventory');
-      queryClient.invalidateQueries('products');
-      queryClient.invalidateQueries('products-active');
-    },
-  });
+  const { data: configuredPaymentMethods = [] } = useQuery('payment-methods-active', () =>
+    paymentMethodsApi.getAll({ active: 1 })
+  );
 
   const sales = salesData?.sales || [];
+  const selectedAccountingDate = currentCashRegister?.accounting_date?.split('T')[0];
 
-  const statusLabel = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return 'Vendido';
-      case 'partially_returned':
-        return 'Parcialmente Devuelto';
-      case 'returned':
-        return 'Devuelto';
-      default:
-        return status;
-    }
-  };
+  const paymentMethods = useMemo(
+    () => [
+      { id: '', label: 'Todos' },
+      ...configuredPaymentMethods.map((method) => ({ id: method.value, label: method.name })),
+    ],
+    [configuredPaymentMethods]
+  );
+
+  const statuses = useMemo(
+    () => [
+      { id: '', label: 'Todos' },
+      { id: 'completed', label: 'Vendido' },
+      { id: 'partially_returned', label: 'Parcialmente Devuelto' },
+      { id: 'returned', label: 'Devuelto' },
+    ],
+    []
+  );
+
+  const salesTotal = useMemo(
+    () => sales.reduce((sum, sale) => sum + Number(sale.final_amount || 0), 0),
+    [sales]
+  );
+
+  const extraMovementsTotal = useMemo(
+    () => cashMovements.reduce((sum, movement) => sum + Number(movement.amount || 0), 0),
+    [cashMovements]
+  );
+
+  const returnedCount = useMemo(
+    () => sales.filter((sale) => sale.status === 'returned' || sale.status === 'partially_returned').length,
+    [sales]
+  );
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -98,44 +138,63 @@ export default function CashMovements() {
     }
   };
 
-  const paymentMethods = useMemo(
-    () => [
-      { id: '', label: 'Todos' },
-      { id: 'cash', label: 'Efectivo' },
-      { id: 'card', label: 'Tarjeta' },
-      { id: 'transfer', label: 'Transferencia' },
-      { id: 'check', label: 'Cheque' },
-    ],
-    []
-  );
+  const movementTypeLabel = (type: string) => {
+    switch (type) {
+      case 'purchase':
+        return 'Compra';
+      case 'return':
+        return 'Devolución';
+      case 'sale':
+        return 'Venta';
+      default:
+        return type;
+    }
+  };
 
-  const statuses = useMemo(
-    () => [
-      { id: '', label: 'Todos' },
-      { id: 'completed', label: 'Vendido' },
-      { id: 'partially_returned', label: 'Parcialmente Devuelto' },
-      { id: 'returned', label: 'Devuelto' },
-    ],
-    []
-  );
+  const resetFilters = () => {
+    const dateStr = selectedAccountingDate || getPeruDateString();
+    setFilters({ start_date: dateStr, end_date: dateStr });
+  };
+
+  const handleExport = async () => {
+    try {
+      await cashRegistersApi.exportMovementsExcel(filters);
+    } catch (error) {
+      console.error('Error exporting cash movements:', error);
+      alert('Error al exportar movimientos de caja');
+    }
+  };
 
   return (
     <div className="page-container">
       <div className="page-header">
         <div>
           <h1>Movimientos de Caja</h1>
-          <p>Ventas registradas (filtra por usuario, fechas y categoría)</p>
+          <p>Ventas registradas por fecha contable de caja.</p>
+        </div>
+        <div className="page-actions">
+          <button className="btn btn-secondary" type="button" onClick={resetFilters}>
+            <RotateCcw size={14} />
+            Limpiar
+          </button>
+          <button className="btn btn-primary" type="button" onClick={handleExport}>
+            <Download size={14} />
+            Excel
+          </button>
         </div>
       </div>
 
       <div className="filters-container">
         <div className="filters-header">
-          <Filter size={20} />
+          <Filter size={16} />
           <span>Filtros</span>
         </div>
-        <div className="filters" style={{ gridTemplateColumns: user?.role === 'admin' ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr' }}>
+        <div
+          className="filters"
+          style={{ gridTemplateColumns: user?.role === 'admin' ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr' }}
+        >
           <div className="filter-group">
-            <label>Desde</label>
+            <label>Desde (Fecha Caja)</label>
             <input
               type="date"
               value={filters.start_date || ''}
@@ -143,7 +202,7 @@ export default function CashMovements() {
             />
           </div>
           <div className="filter-group">
-            <label>Hasta</label>
+            <label>Hasta (Fecha Caja)</label>
             <input
               type="date"
               value={filters.end_date || ''}
@@ -195,6 +254,29 @@ export default function CashMovements() {
         </div>
       </div>
 
+      <div className="cash-movements-summary">
+        <div className="cash-summary-card">
+          <span>Ventas</span>
+          <strong>{sales.length}</strong>
+          <small>{formatCurrency(salesTotal)}</small>
+        </div>
+        <div className="cash-summary-card">
+          <span>Devoluciones</span>
+          <strong>{returnedCount}</strong>
+          <small>en el rango</small>
+        </div>
+        <div className="cash-summary-card">
+          <span>Otros movimientos</span>
+          <strong>{cashMovements.length}</strong>
+          <small>{formatCurrency(extraMovementsTotal)}</small>
+        </div>
+        <div className="cash-summary-card emphasis">
+          <span>Total listado</span>
+          <strong>{formatCurrency(salesTotal + extraMovementsTotal)}</strong>
+          <small>según filtros</small>
+        </div>
+      </div>
+
       <div className="table-container">
         <table>
           <thead>
@@ -204,20 +286,19 @@ export default function CashMovements() {
               <th>Total</th>
               <th>Método de Pago</th>
               <th>Estado</th>
-              <th>Fecha</th>
+              <th>Fecha Caja</th>
+              <th>Fecha Venta</th>
               <th>Acciones</th>
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-light)' }}>
-                  Cargando...
-                </td>
+                <td colSpan={8} className="empty-cell">Cargando movimientos...</td>
               </tr>
             ) : sales.length === 0 ? (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-light)' }}>
+                <td colSpan={8} className="empty-cell">
                   No hay movimientos para los filtros seleccionados.
                 </td>
               </tr>
@@ -226,32 +307,20 @@ export default function CashMovements() {
                 <tr key={sale.id}>
                   <td>{sale.sale_number}</td>
                   <td>{sale.customer_name || 'Cliente General'}</td>
-                  <td>${sale.final_amount.toFixed(2)}</td>
-                  <td>{sale.payment_method}</td>
-                  <td>{getStatusBadge(sale.status || 'completed')}</td>
+                  <td>{formatCurrency(Number(sale.final_amount || 0))}</td>
                   <td>
-                    {(() => {
-                      const date = new Date(sale.created_at);
-                      const peruDate = new Date(date.toLocaleString('en-US', { timeZone: 'America/Lima' }));
-                      return format(peruDate, 'dd/MM/yyyy HH:mm', { locale: es });
-                    })()}
+                    {sale.payment_method_name || sale.payment_method}
+                    {sale.payment_reference ? ` (${sale.payment_reference})` : ''}
                   </td>
+                  <td>{getStatusBadge(sale.status || 'completed')}</td>
+                  <td>{formatAccountingDate(sale.cash_accounting_date)}</td>
+                  <td>{formatPeruDateTime(sale.created_at)}</td>
                   <td>
                     <div className="action-buttons">
                       <button
                         onClick={async () => {
                           try {
-                            const token = localStorage.getItem('token');
-                            const response = await fetch(buildApiUrl(`/receipts/${sale.id}/pdf`), {
-                              headers: { 'Authorization': `Bearer ${token}` },
-                            });
-                            if (response.ok) {
-                              const blob = await response.blob();
-                              const url = window.URL.createObjectURL(blob);
-                              window.open(url, '_blank');
-                            } else {
-                              alert('Error al generar el ticket');
-                            }
+                            await printReceipt(sale.id);
                           } catch (error) {
                             console.error('Error:', error);
                             alert('Error al generar el ticket');
@@ -260,20 +329,7 @@ export default function CashMovements() {
                         className="btn-icon"
                         title="Imprimir ticket"
                       >
-                        <Printer size={16} />
-                      </button>
-                      <button
-                        onClick={() => {
-                          const label = statusLabel(sale.status || 'completed');
-                          if (window.confirm(`¿Está seguro de cancelar este movimiento? (Estado: ${label})`)) {
-                            cancelSaleMutation.mutate(sale.id);
-                          }
-                        }}
-                        className="btn-icon btn-danger"
-                        title="Cancelar venta"
-                        disabled={cancelSaleMutation.isLoading}
-                      >
-                        <Trash2 size={16} />
+                        <Printer size={14} />
                       </button>
                     </div>
                   </td>
@@ -285,9 +341,9 @@ export default function CashMovements() {
       </div>
 
       {cashMovements.length > 0 && (
-        <div className="table-container" style={{ marginTop: '2rem' }}>
-          <h3 style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <ShoppingBag size={20} />
+        <div className="table-container cash-extra-table">
+          <h3 className="section-title-inline">
+            <ShoppingBag size={15} />
             Compras y otros movimientos que afectaron caja
           </h3>
           <table>
@@ -295,23 +351,25 @@ export default function CashMovements() {
               <tr>
                 <th>Descripción</th>
                 <th>Tipo</th>
+                <th>Método</th>
                 <th>Monto</th>
                 <th>Usuario</th>
-                <th>Fecha</th>
+                <th>Fecha Caja</th>
+                <th>Fecha Registro</th>
               </tr>
             </thead>
             <tbody>
               {cashMovements.map((cm) => (
                 <tr key={cm.id}>
                   <td>{cm.description || '-'}</td>
-                  <td>{cm.movement_type === 'purchase' ? 'Compra' : cm.movement_type}</td>
+                  <td>{movementTypeLabel(cm.movement_type)}</td>
+                  <td>{cm.payment_method_name || cm.payment_method || '-'}</td>
                   <td style={{ color: cm.amount < 0 ? 'var(--danger)' : 'var(--success)' }}>
-                    ${cm.amount.toFixed(2)}
+                    {formatCurrency(Number(cm.amount || 0))}
                   </td>
                   <td>{cm.user_name || '-'}</td>
-                  <td>
-                    {format(new Date(cm.created_at), 'dd/MM/yyyy HH:mm', { locale: es })}
-                  </td>
+                  <td>{formatAccountingDate(cm.accounting_date)}</td>
+                  <td>{formatPeruDateTime(cm.created_at)}</td>
                 </tr>
               ))}
             </tbody>
@@ -321,4 +379,3 @@ export default function CashMovements() {
     </div>
   );
 }
-
