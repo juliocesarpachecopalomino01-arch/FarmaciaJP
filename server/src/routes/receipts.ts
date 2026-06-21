@@ -10,6 +10,27 @@ const mmToPoints = (mm: number) => mm * 2.83465;
 const money = (value: number) => `$${Number(value || 0).toFixed(2)}`;
 const amount = (value: number) => Number(value || 0).toFixed(2);
 
+function getThermalLayout(settings: any) {
+  const paperWidthMm = Number(settings.receipt_width_mm || 80);
+  const printableWidthMm = paperWidthMm >= 76 ? 72 : 48;
+  const margin = paperWidthMm >= 76 ? 5 : 4;
+  const topMargin = 0;
+  const bottomMargin = 4;
+  const bottomPadding = 12;
+  const width = mmToPoints(printableWidthMm);
+  const contentRight = width - margin;
+
+  return {
+    width,
+    margin,
+    topMargin,
+    bottomMargin,
+    bottomPadding,
+    contentRight,
+    printableWidthMm,
+  };
+}
+
 function imageBufferFromDataUrl(dataUrl?: string | null) {
   if (!dataUrl || !dataUrl.includes(',')) return null;
   return Buffer.from(dataUrl.split(',')[1], 'base64');
@@ -107,18 +128,23 @@ router.get('/inventory-adjustments/:movementId/pdf', authenticateToken, async (r
       return res.status(400).json({ error: 'Only adjustment movements have this voucher' });
     }
 
-    const width = mmToPoints(Number(settings.receipt_width_mm || 80));
-    const margin = 14;
-    const contentRight = width - margin;
+    const { width, margin, topMargin, bottomMargin, bottomPadding, contentRight } = getThermalLayout(settings);
     const quantity = Number(movement.quantity) || 0;
     const currentStock = Number(movement.current_stock) || 0;
     const previousStock = currentStock + quantity;
     const hasLogo = Boolean(settings.logo_data_url && settings.show_logo);
-    const estimatedHeight = margin * 2 + (hasLogo ? 36 : 20) + 170 + (settings.show_qr ? 60 : 0);
+    const notesLines = movement.notes ? Math.ceil(String(movement.notes).length / 28) : 0;
+    const estimatedHeight =
+      topMargin +
+      bottomPadding +
+      (hasLogo ? 34 : 18) +
+      110 +
+      notesLines * 8 +
+      (settings.show_qr ? 58 : 0);
 
     const doc = new PDFDocument({
-      margin,
-      size: [width, Math.max(estimatedHeight, 260)],
+      margins: { top: topMargin, bottom: bottomMargin, left: margin, right: margin },
+      size: [width, Math.max(estimatedHeight, 220)],
       bufferPages: false,
     });
 
@@ -219,16 +245,24 @@ router.get('/inventory-loads/:reference/pdf', authenticateToken, async (req: Aut
       return res.status(404).json({ error: 'Initial load not found' });
     }
 
-    const width = mmToPoints(Number(settings.receipt_width_mm || 80));
-    const margin = 14;
-    const contentRight = width - margin;
+    const { width, margin, topMargin, bottomMargin, bottomPadding, contentRight } = getThermalLayout(settings);
     const hasLogo = Boolean(settings.logo_data_url && settings.show_logo);
-    const itemLines = movements.reduce((sum, item) => sum + Math.max(1, Math.ceil(String(item.product_name || '').length / 24)), 0);
-    const estimatedHeight = margin * 2 + (hasLogo ? 36 : 20) + 120 + itemLines * 10 + (settings.show_qr ? 58 : 0);
+    const qtyW = 30;
+    const descX = margin + qtyW;
+    const descWidth = contentRight - descX;
+    const charsPerLine = Math.max(14, Math.floor(descWidth / 3.2));
+    const itemLines = movements.reduce((sum, item) => sum + Math.max(1, Math.ceil(String(item.product_name || '').length / charsPerLine)), 0);
+    const estimatedHeight =
+      topMargin +
+      bottomPadding +
+      (hasLogo ? 34 : 18) +
+      100 +
+      itemLines * 9 +
+      (settings.show_qr ? 58 : 0);
 
     const doc = new PDFDocument({
-      margin,
-      size: [width, Math.max(estimatedHeight, 280)],
+      margins: { top: topMargin, bottom: bottomMargin, left: margin, right: margin },
+      size: [width, Math.max(estimatedHeight, 230)],
       bufferPages: false,
     });
 
@@ -271,8 +305,6 @@ router.get('/inventory-loads/:reference/pdf', authenticateToken, async (req: Aut
     doc.text(`Cantidad total: ${totalQuantity}`);
     line(doc, margin, contentRight);
 
-    const qtyW = 30;
-    const descX = margin + qtyW;
     const qtyX = margin;
     doc.font('Helvetica-Bold').fontSize(7);
     doc.text('CANT.', qtyX, doc.y, { width: qtyW });
@@ -328,10 +360,17 @@ router.get('/:saleId/pdf', authenticateToken, async (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Sale not found' });
     }
 
-    const width = mmToPoints(Number(settings.receipt_width_mm || 80));
-    const margin = 14;
-    const contentRight = width - margin;
+    const { width, margin, topMargin, bottomMargin, bottomPadding, contentRight } = getThermalLayout(settings);
     const hasLogo = Boolean(settings.logo_data_url && settings.show_logo);
+    const qtyW = 24;
+    const amountW = 40;
+    const unitW = 40;
+    const qtyX = margin;
+    const amountX = contentRight - amountW;
+    const unitX = amountX - unitW - 4;
+    const descX = margin + qtyW;
+    const descWidth = unitX - descX - 4;
+    const charsPerLine = Math.max(12, Math.floor(descWidth / 3.2));
     const companyLineCount = [
       !hasLogo && settings.trade_name,
       settings.tax_id,
@@ -341,31 +380,32 @@ router.get('/:saleId/pdf', authenticateToken, async (req: AuthRequest, res) => {
     ].filter(Boolean).length;
     const saleLineCount = 3 + (sale.customer_name ? 1 : 0);
     const itemLineCount = items.reduce((sum, item) => {
-      const nameLines = Math.max(1, Math.ceil(String(item.product_name || '').length / 22));
+      const nameLines = Math.max(1, Math.ceil(String(item.product_name || '').length / charsPerLine));
       return sum + nameLines + (item.discount > 0 ? 1 : 0);
     }, 0);
     const totalsLineCount = 2 + (sale.discount > 0 ? 1 : 0) + (sale.tax_amount > 0 ? 1 : 0);
     const paymentLineCount = 1 + (sale.payment_reference ? 1 : 0);
     const footerLineCount = 1 + (settings.website ? 1 : 0);
     const estimatedHeight =
-      margin * 2 +
-      (hasLogo ? 36 : 20) +
+      topMargin +
+      bottomPadding +
+      (hasLogo ? 34 : 18) +
       companyLineCount * 8 +
-      8 +
+      12 +
       saleLineCount * 8 +
-      8 +
-      itemLineCount * 8 +
-      8 +
+      12 +
+      itemLineCount * 9 +
+      12 +
       totalsLineCount * 9 +
-      8 +
+      12 +
       paymentLineCount * 8 +
       (settings.show_qr ? 60 : 0) +
       footerLineCount * 8 +
-      18;
+      10;
 
     const doc = new PDFDocument({
-      margin,
-      size: [width, Math.max(estimatedHeight, 300)],
+      margins: { top: topMargin, bottom: bottomMargin, left: margin, right: margin },
+      size: [width, Math.max(estimatedHeight, 235)],
       bufferPages: false,
     });
 
@@ -412,15 +452,6 @@ router.get('/:saleId/pdf', authenticateToken, async (req: AuthRequest, res) => {
     if (sale.customer_name) doc.text(`Cliente: ${sale.customer_name}`);
     doc.text(`Vendedor: ${sale.user_full_name || sale.user_name}`);
     line(doc, margin, contentRight);
-
-    const qtyW = 24;
-    const amountW = 40;
-    const unitW = 40;
-    const qtyX = margin;
-    const amountX = contentRight - amountW;
-    const unitX = amountX - unitW - 4;
-    const descX = margin + qtyW;
-    const descWidth = unitX - descX - 4;
 
     doc.font('Helvetica-Bold').fontSize(7);
     const headerY = doc.y;

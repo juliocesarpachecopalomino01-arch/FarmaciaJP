@@ -7,6 +7,14 @@ import { useAuth } from '../hooks/useAuth';
 import { FileText } from 'lucide-react';
 import './Sales.css';
 
+function getLocalDateInputValue() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export default function CashRegisterPage() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
@@ -21,7 +29,7 @@ export default function CashRegisterPage() {
 
   const [cashForm, setCashForm] = useState({
     opening_balance: '',
-    accounting_date: new Date().toISOString().slice(0, 10),
+    accounting_date: getLocalDateInputValue(),
     closing_balance: '',
     notes: '',
   });
@@ -63,7 +71,7 @@ export default function CashRegisterPage() {
   const resetCashForm = () => {
     setCashForm({
       opening_balance: '',
-      accounting_date: new Date().toISOString().slice(0, 10),
+      accounting_date: getLocalDateInputValue(),
       closing_balance: '',
       notes: '',
     });
