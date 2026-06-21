@@ -12,13 +12,16 @@ const amount = (value: number) => Number(value || 0).toFixed(2);
 
 function getThermalLayout(settings: any) {
   const paperWidthMm = Number(settings.receipt_width_mm || 80);
-  const printableWidthMm = paperWidthMm >= 76 ? 72 : 48;
-  const margin = paperWidthMm >= 76 ? 5 : 4;
+  const printableWidthMm = paperWidthMm >= 76 ? 68 : 46;
+  const pageWidthMm = paperWidthMm >= 76 ? 80 : 58;
+  const sideQuietZone = Math.max(0, mmToPoints((pageWidthMm - printableWidthMm) / 2));
+  const innerMargin = paperWidthMm >= 76 ? 3 : 2;
+  const margin = sideQuietZone + innerMargin;
   const topMargin = 0;
-  const bottomMargin = 4;
-  const bottomPadding = 12;
-  const width = mmToPoints(printableWidthMm);
-  const contentRight = width - margin;
+  const bottomMargin = 10;
+  const bottomPadding = paperWidthMm >= 76 ? 56 : 42;
+  const width = mmToPoints(pageWidthMm);
+  const contentRight = width - sideQuietZone - innerMargin;
 
   return {
     width,
@@ -29,6 +32,10 @@ function getThermalLayout(settings: any) {
     contentRight,
     printableWidthMm,
   };
+}
+
+function getTicketHeight(estimatedHeight: number) {
+  return Math.ceil(Math.max(estimatedHeight, 1));
 }
 
 function imageBufferFromDataUrl(dataUrl?: string | null) {
@@ -144,7 +151,7 @@ router.get('/inventory-adjustments/:movementId/pdf', authenticateToken, async (r
 
     const doc = new PDFDocument({
       margins: { top: topMargin, bottom: bottomMargin, left: margin, right: margin },
-      size: [width, Math.max(estimatedHeight, 220)],
+      size: [width, getTicketHeight(estimatedHeight)],
       bufferPages: false,
     });
 
@@ -262,7 +269,7 @@ router.get('/inventory-loads/:reference/pdf', authenticateToken, async (req: Aut
 
     const doc = new PDFDocument({
       margins: { top: topMargin, bottom: bottomMargin, left: margin, right: margin },
-      size: [width, Math.max(estimatedHeight, 230)],
+      size: [width, getTicketHeight(estimatedHeight)],
       bufferPages: false,
     });
 
@@ -405,7 +412,7 @@ router.get('/:saleId/pdf', authenticateToken, async (req: AuthRequest, res) => {
 
     const doc = new PDFDocument({
       margins: { top: topMargin, bottom: bottomMargin, left: margin, right: margin },
-      size: [width, Math.max(estimatedHeight, 235)],
+      size: [width, getTicketHeight(estimatedHeight)],
       bufferPages: false,
     });
 
