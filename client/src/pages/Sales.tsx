@@ -31,7 +31,7 @@ export default function Sales() {
   const { data: productsData } = useQuery(
     ['products-active', normalizedProductSearch],
     () => productsApi.getAll({
-      limit: normalizedProductSearch ? 50 : 100,
+      limit: normalizedProductSearch ? 1000 : 100,
       is_active: 1,
       search: normalizedProductSearch || undefined,
     }),
@@ -236,8 +236,7 @@ export default function Sales() {
   };
   const filteredProducts = availableProducts
     .filter(productMatchesSearch)
-    .sort((a, b) => getProductSearchScore(a) - getProductSearchScore(b) || a.name.localeCompare(b.name))
-    .slice(0, 8);
+    .sort((a, b) => getProductSearchScore(a) - getProductSearchScore(b) || a.name.localeCompare(b.name));
 
   const selectProduct = (productId: number) => {
     addToCart(productId);

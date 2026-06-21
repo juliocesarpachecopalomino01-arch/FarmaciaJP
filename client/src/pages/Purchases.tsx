@@ -56,7 +56,7 @@ export default function Purchases() {
   const { data: productsData } = useQuery(
     ['products-purchase-search', normalizedProductSearch],
     () => productsApi.getAll({
-      limit: normalizedProductSearch ? 50 : 100,
+      limit: normalizedProductSearch ? 1000 : 100,
       is_active: 1,
       search: normalizedProductSearch || undefined,
     }),
@@ -65,7 +65,7 @@ export default function Purchases() {
   const { data: editProductsData } = useQuery(
     ['products-purchase-edit-search', normalizedEditProductSearch],
     () => productsApi.getAll({
-      limit: normalizedEditProductSearch ? 50 : 100,
+      limit: normalizedEditProductSearch ? 1000 : 100,
       is_active: 1,
       search: normalizedEditProductSearch || undefined,
     }),
@@ -227,8 +227,7 @@ export default function Purchases() {
     products
       .filter((product) => product.is_active === undefined || product.is_active === 1)
       .filter((product) => productMatchesSearch(product, searchValue))
-      .sort((a, b) => getProductSearchScore(a, searchValue) - getProductSearchScore(b, searchValue) || a.name.localeCompare(b.name))
-      .slice(0, 8);
+      .sort((a, b) => getProductSearchScore(a, searchValue) - getProductSearchScore(b, searchValue) || a.name.localeCompare(b.name));
 
   const filteredProducts = getFilteredProducts(productsData?.products || [], normalizedProductSearch);
   const filteredEditProducts = getFilteredProducts(editProductsData?.products || [], normalizedEditProductSearch);
