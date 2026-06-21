@@ -1,8 +1,8 @@
-﻿import { useEffect, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { purchasesApi, CreatePurchaseRequest, Purchase } from '../api/purchases';
 import { suppliersApi } from '../api/suppliers';
-import { productsApi } from '../api/products';
+import { Product, productsApi } from '../api/products';
 import { cashRegistersApi } from '../api/cashRegisters';
 import { paymentMethodsApi } from '../api/paymentMethods';
 import { Download, Filter, Plus, ShoppingBag, X, Pencil, Trash2 } from 'lucide-react';
@@ -27,6 +27,12 @@ export default function Purchases() {
   const [deletePassword, setDeletePassword] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editCart, setEditCart] = useState<CartItem[]>([]);
+  const [productSearch, setProductSearch] = useState('');
+  const [isProductSearchOpen, setIsProductSearchOpen] = useState(false);
+  const [editProductSearch, setEditProductSearch] = useState('');
+  const [isEditProductSearchOpen, setIsEditProductSearchOpen] = useState(false);
+  const productSearchRef = useRef<HTMLInputElement | null>(null);
+  const editProductSearchRef = useRef<HTMLInputElement | null>(null);
   const [filters, setFilters] = useState({
     start_date: getToday(),
     end_date: getToday(),
@@ -45,7 +51,26 @@ export default function Purchases() {
 
   const { data: purchasesData } = useQuery(['purchases', filters], () => purchasesApi.getAll({ ...filters, limit: 100 }));
   const { data: suppliersData } = useQuery('suppliers', () => suppliersApi.getAll({ limit: 1000 }));
-  const { data: productsData } = useQuery('products', () => productsApi.getAll({ limit: 1000 }));
+  const normalizedProductSearch = productSearch.trim().toLowerCase();
+  const normalizedEditProductSearch = editProductSearch.trim().toLowerCase();
+  const { data: productsData } = useQuery(
+    ['products-purchase-search', normalizedProductSearch],
+    () => productsApi.getAll({
+      limit: normalizedProductSearch ? 50 : 100,
+      is_active: 1,
+      search: normalizedProductSearch || undefined,
+    }),
+    { keepPreviousData: true, enabled: showModal }
+  );
+  const { data: editProductsData } = useQuery(
+    ['products-purchase-edit-search', normalizedEditProductSearch],
+    () => productsApi.getAll({
+      limit: normalizedEditProductSearch ? 50 : 100,
+      is_active: 1,
+      search: normalizedEditProductSearch || undefined,
+    }),
+    { keepPreviousData: true, enabled: showEditModal }
+  );
   const { data: currentCaja } = useQuery('cash-register-current', () => cashRegistersApi.getCurrent());
   const { data: paymentMethods = [] } = useQuery('payment-methods-active', () => paymentMethodsApi.getAll({ active: 1 }));
 
@@ -156,8 +181,59 @@ export default function Purchases() {
     setShowDeleteModal(true);
   };
 
-  const addToCart = (productId: number) => {
-    const product = productsData?.products.find((p) => p.id === productId);
+  const getProductDisplayName = (product: { name: string; laboratory?: string }) => {
+    const laboratory = product.laboratory?.trim();
+    return laboratory ? `${product.name} | ${laboratory}` : product.name;
+  };
+
+  const normalizeSearchText = (value: unknown) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+
+  const productMatchesSearch = (product: Product, searchValue: string) => {
+    if (!searchValue) return true;
+    const terms = normalizeSearchText(searchValue).split(/\s+/).filter(Boolean);
+    const searchableText = normalizeSearchText([
+      product.name,
+      product.barcode,
+      product.category_name,
+      product.laboratory,
+      product.presentation,
+      product.sanitary_registration,
+      product.lot_number,
+      product.unit_price?.toFixed(2),
+      product.cost_price?.toFixed(2),
+    ].join(' '));
+    return terms.every((term) => searchableText.includes(term));
+  };
+
+  const getProductSearchScore = (product: Product, searchValue: string) => {
+    if (!searchValue) return 0;
+    const search = normalizeSearchText(searchValue);
+    const name = normalizeSearchText(product.name);
+    const barcode = normalizeSearchText(product.barcode);
+    const displayName = normalizeSearchText(getProductDisplayName(product));
+
+    if (name === search || barcode === search) return 0;
+    if (name.startsWith(search) || barcode.startsWith(search)) return 1;
+    if (displayName.includes(search)) return 2;
+    return 3;
+  };
+
+  const getFilteredProducts = (products: Product[] = [], searchValue: string) =>
+    products
+      .filter((product) => product.is_active === undefined || product.is_active === 1)
+      .filter((product) => productMatchesSearch(product, searchValue))
+      .sort((a, b) => getProductSearchScore(a, searchValue) - getProductSearchScore(b, searchValue) || a.name.localeCompare(b.name))
+      .slice(0, 8);
+
+  const filteredProducts = getFilteredProducts(productsData?.products || [], normalizedProductSearch);
+  const filteredEditProducts = getFilteredProducts(editProductsData?.products || [], normalizedEditProductSearch);
+
+  const addToCart = (product: Product) => {
     if (!product) return;
 
     // Verificar que el producto tenga precio de compra configurado
@@ -166,22 +242,25 @@ export default function Purchases() {
       return;
     }
 
-    const existingItem = cart.find((item) => item.product_id === productId);
+    const existingItem = cart.find((item) => item.product_id === product.id);
     if (existingItem) {
       setCart(cart.map((item) =>
-        item.product_id === productId
+        item.product_id === product.id
           ? { ...item, quantity: item.quantity + 1 }
           : item
       ));
     } else {
       setCart([...cart, {
-        product_id: productId,
-        name: product.name,
+        product_id: product.id,
+        name: getProductDisplayName(product),
         quantity: 1,
         unit_price: product.unit_price,
         cost_price: product.cost_price, // Usar siempre el precio de compra del producto
       }]);
     }
+    setProductSearch('');
+    setIsProductSearchOpen(false);
+    window.requestAnimationFrame(() => productSearchRef.current?.focus());
   };
 
   const removeFromCart = (productId: number) => {
@@ -194,15 +273,17 @@ export default function Purchases() {
     ));
   };
 
-  const addToEditCart = (productId: number) => {
-    const product = productsData?.products.find((p) => p.id === productId);
+  const addToEditCart = (product: Product) => {
     if (!product || !product.cost_price) return;
-    const existing = editCart.find((i) => i.product_id === productId);
+    const existing = editCart.find((i) => i.product_id === product.id);
     if (existing) {
-      setEditCart(editCart.map((i) => i.product_id === productId ? { ...i, quantity: i.quantity + 1 } : i));
+      setEditCart(editCart.map((i) => i.product_id === product.id ? { ...i, quantity: i.quantity + 1 } : i));
     } else {
-      setEditCart([...editCart, { product_id: product.id, name: product.name, quantity: 1, unit_price: product.unit_price, cost_price: product.cost_price }]);
+      setEditCart([...editCart, { product_id: product.id, name: getProductDisplayName(product), quantity: 1, unit_price: product.unit_price, cost_price: product.cost_price }]);
     }
+    setEditProductSearch('');
+    setIsEditProductSearchOpen(false);
+    window.requestAnimationFrame(() => editProductSearchRef.current?.focus());
   };
 
   const removeFromEditCart = (productId: number) => setEditCart(editCart.filter((i) => i.product_id !== productId));
@@ -417,22 +498,48 @@ export default function Purchases() {
 
                 <div className="form-group">
                   <label>Agregar Producto</label>
-                  <select
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        addToCart(Number(e.target.value));
-                        e.target.value = '';
-                      }
-                    }}
-                  >
-                    <option value="">Seleccionar producto...</option>
-                    {productsData?.products
-                      .map((product) => (
-                        <option key={product.id} value={product.id}>
-                          {product.name} - S/ {product.unit_price.toFixed(2)}
-                        </option>
-                      ))}
-                  </select>
+                  <div className="product-combobox purchase-product-combobox">
+                    <input
+                      ref={productSearchRef}
+                      type="text"
+                      value={productSearch}
+                      onFocus={() => setIsProductSearchOpen(true)}
+                      onBlur={() => window.setTimeout(() => setIsProductSearchOpen(false), 120)}
+                      onChange={(e) => {
+                        setProductSearch(e.target.value);
+                        setIsProductSearchOpen(true);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && filteredProducts[0]) {
+                          e.preventDefault();
+                          addToCart(filteredProducts[0]);
+                        }
+                      }}
+                      placeholder="Escribe nombre, código, laboratorio..."
+                    />
+                    {isProductSearchOpen && (
+                      <div className="product-suggestions purchase-product-suggestions">
+                        {filteredProducts.length > 0 ? (
+                          filteredProducts.map((product) => (
+                            <button
+                              type="button"
+                              key={product.id}
+                              className="product-suggestion"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => addToCart(product)}
+                            >
+                              <span>
+                                <strong>{getProductDisplayName(product)}</strong>
+                                {product.barcode && <small>{product.barcode}</small>}
+                              </span>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="product-suggestion-empty">No hay productos coincidentes</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="cart-items">
@@ -620,12 +727,48 @@ export default function Purchases() {
                 </div>
                 <div className="form-group">
                   <label>Agregar Producto</label>
-                  <select onChange={(e) => { if (e.target.value) { addToEditCart(Number(e.target.value)); e.target.value = ''; } }}>
-                    <option value="">Seleccionar producto...</option>
-                    {productsData?.products.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} - S/ {(p.unit_price || 0).toFixed(2)}</option>
-                    ))}
-                  </select>
+                  <div className="product-combobox purchase-product-combobox">
+                    <input
+                      ref={editProductSearchRef}
+                      type="text"
+                      value={editProductSearch}
+                      onFocus={() => setIsEditProductSearchOpen(true)}
+                      onBlur={() => window.setTimeout(() => setIsEditProductSearchOpen(false), 120)}
+                      onChange={(e) => {
+                        setEditProductSearch(e.target.value);
+                        setIsEditProductSearchOpen(true);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && filteredEditProducts[0]) {
+                          e.preventDefault();
+                          addToEditCart(filteredEditProducts[0]);
+                        }
+                      }}
+                      placeholder="Escribe nombre, código, laboratorio..."
+                    />
+                    {isEditProductSearchOpen && (
+                      <div className="product-suggestions purchase-product-suggestions">
+                        {filteredEditProducts.length > 0 ? (
+                          filteredEditProducts.map((product) => (
+                            <button
+                              type="button"
+                              key={product.id}
+                              className="product-suggestion"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => addToEditCart(product)}
+                            >
+                              <span>
+                                <strong>{getProductDisplayName(product)}</strong>
+                                {product.barcode && <small>{product.barcode}</small>}
+                              </span>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="product-suggestion-empty">No hay productos coincidentes</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="cart-items">
                   <h3>Productos</h3>
@@ -730,3 +873,4 @@ export default function Purchases() {
     </div>
   );
 }
+

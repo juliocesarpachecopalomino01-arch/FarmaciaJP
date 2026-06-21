@@ -2,7 +2,7 @@
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { salesApi, CreateSaleRequest } from '../api/sales';
-import { productsApi } from '../api/products';
+import { Product, productsApi } from '../api/products';
 import { customersApi } from '../api/customers';
 import { cashRegistersApi, CashRegister } from '../api/cashRegisters';
 import { paymentMethodsApi } from '../api/paymentMethods';
@@ -27,7 +27,16 @@ export default function Sales() {
 
   const queryClient = useQueryClient();
 
-  const { data: productsData } = useQuery('products-active', () => productsApi.getAll({ limit: 1000, is_active: 1 }));
+  const normalizedProductSearch = productSearch.trim().toLowerCase();
+  const { data: productsData } = useQuery(
+    ['products-active', normalizedProductSearch],
+    () => productsApi.getAll({
+      limit: normalizedProductSearch ? 50 : 100,
+      is_active: 1,
+      search: normalizedProductSearch || undefined,
+    }),
+    { keepPreviousData: true }
+  );
   const { data: customersData } = useQuery('customers', () => customersApi.getAll({ limit: 1000 }));
   const { data: currentCashRegister } = useQuery<CashRegister | null>('cash-register-current', cashRegistersApi.getCurrent);
   const { data: paymentMethods = [] } = useQuery('payment-methods-active', () => paymentMethodsApi.getAll({ active: 1 }));
@@ -188,22 +197,46 @@ export default function Sales() {
   const changeAmount = calculateChange();
   const isPaymentValid = !isCash || totalAmount <= 0 || (Number(saleForm.amount_paid) || 0) >= totalAmount;
   const availableProducts = (productsData?.products || []).filter((p) => (p.stock || 0) > 0 && (p.is_active === undefined || p.is_active === 1));
-  const normalizedProductSearch = productSearch.trim().toLowerCase();
   const getProductDisplayName = (product: { name: string; laboratory?: string }) => {
     const laboratory = product.laboratory?.trim();
     return laboratory ? `${product.name} | ${laboratory}` : product.name;
   };
+  const normalizeSearchText = (value: unknown) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+  const productMatchesSearch = (product: Product) => {
+    if (!normalizedProductSearch) return true;
+    const terms = normalizeSearchText(normalizedProductSearch).split(/\s+/).filter(Boolean);
+    const searchableText = normalizeSearchText([
+      product.name,
+      product.barcode,
+      product.category_name,
+      product.laboratory,
+      product.presentation,
+      product.sanitary_registration,
+      product.lot_number,
+      product.unit_price?.toFixed(2),
+    ].join(' '));
+    return terms.every((term) => searchableText.includes(term));
+  };
+  const getProductSearchScore = (product: Product) => {
+    if (!normalizedProductSearch) return 0;
+    const search = normalizeSearchText(normalizedProductSearch);
+    const name = normalizeSearchText(product.name);
+    const barcode = normalizeSearchText(product.barcode);
+    const displayName = normalizeSearchText(getProductDisplayName(product));
+
+    if (name === search || barcode === search) return 0;
+    if (name.startsWith(search) || barcode.startsWith(search)) return 1;
+    if (displayName.includes(search)) return 2;
+    return 3;
+  };
   const filteredProducts = availableProducts
-    .filter((product) => {
-      if (!normalizedProductSearch) return true;
-      return [
-        product.name,
-        product.barcode,
-        product.category_name,
-        product.laboratory,
-        product.unit_price?.toFixed(2),
-      ].some((value) => String(value || '').toLowerCase().includes(normalizedProductSearch));
-    })
+    .filter(productMatchesSearch)
+    .sort((a, b) => getProductSearchScore(a) - getProductSearchScore(b) || a.name.localeCompare(b.name))
     .slice(0, 8);
 
   const selectProduct = (productId: number) => {
