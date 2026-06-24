@@ -8,6 +8,7 @@ import { salesApi, Sale } from '../api/sales';
 import { usersApi } from '../api/users';
 import { cashRegistersApi, CashMovement } from '../api/cashRegisters';
 import { paymentMethodsApi } from '../api/paymentMethods';
+import { companySettingsApi } from '../api/companySettings';
 import { printReceipt } from '../utils/printReceipt';
 import './Sales.css';
 import './CashMovements.css';
@@ -24,6 +25,13 @@ function getPeruDateString() {
   const now = new Date();
   const peruDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Lima' }));
   return peruDate.toISOString().slice(0, 10);
+}
+
+function getPeruDateStringOffset(daysOffset: number) {
+  const [year, month, day] = getPeruDateString().split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + daysOffset);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
 }
 
 function formatAccountingDate(value?: string | null) {
@@ -46,6 +54,11 @@ function formatCurrency(value: number) {
 
 export default function CashMovements() {
   const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const { data: companySettings } = useQuery('company-settings', companySettingsApi.get);
+  const historyDays = Math.max(1, Number(companySettings?.non_admin_history_days || 5));
+  const minVisibleDate = getPeruDateStringOffset(-historyDays);
+  const maxVisibleDate = getPeruDateString();
   const [filters, setFilters] = useState<Filters>(() => {
     const dateStr = getPeruDateString();
     return { start_date: dateStr, end_date: dateStr };
@@ -53,35 +66,52 @@ export default function CashMovements() {
 
   const { data: currentCashRegister } = useQuery('cash-register-current', cashRegistersApi.getCurrent);
 
+  const clampDate = (date?: string) => {
+    if (!date || isAdmin) return date;
+    if (date < minVisibleDate) return minVisibleDate;
+    if (date > maxVisibleDate) return maxVisibleDate;
+    return date;
+  };
+
   useEffect(() => {
     if (!currentCashRegister?.accounting_date) return;
     const accountingDate = currentCashRegister.accounting_date.split('T')[0];
 
     setFilters((currentFilters) => ({
       ...currentFilters,
-      start_date: accountingDate,
-      end_date: accountingDate,
+      start_date: clampDate(accountingDate),
+      end_date: clampDate(accountingDate),
     }));
-  }, [currentCashRegister?.accounting_date]);
+  }, [currentCashRegister?.accounting_date, isAdmin, minVisibleDate, maxVisibleDate]);
+
+  const effectiveFilters = useMemo<Filters>(() => {
+    if (isAdmin) return filters;
+    return {
+      ...filters,
+      start_date: clampDate(filters.start_date),
+      end_date: clampDate(filters.end_date),
+      user_id: undefined,
+    };
+  }, [filters, isAdmin, minVisibleDate, maxVisibleDate]);
 
   const { data: salesData, isLoading } = useQuery(
-    ['cash-movements-sales', filters],
-    () => salesApi.getAll({ ...filters, limit: 200 }),
+    ['cash-movements-sales', effectiveFilters],
+    () => salesApi.getAll({ ...effectiveFilters, limit: 200 }),
     { keepPreviousData: true }
   );
 
   const { data: users } = useQuery('users', usersApi.getAll, {
-    enabled: user?.role === 'admin',
+    enabled: isAdmin,
   });
 
   const { data: cashMovements = [] } = useQuery<CashMovement[]>(
-    ['cash-movements-extra', filters],
+    ['cash-movements-extra', effectiveFilters],
     () =>
       cashRegistersApi.getMovements({
-        start_date: filters.start_date,
-        end_date: filters.end_date,
-        user_id: filters.user_id,
-        payment_method: filters.payment_method,
+        start_date: effectiveFilters.start_date,
+        end_date: effectiveFilters.end_date,
+        user_id: effectiveFilters.user_id,
+        payment_method: effectiveFilters.payment_method,
       })
   );
 
@@ -146,6 +176,10 @@ export default function CashMovements() {
         return 'Devolución';
       case 'sale':
         return 'Venta';
+      case 'income':
+        return 'Ingreso';
+      case 'expense':
+        return 'Salida';
       default:
         return type;
     }
@@ -153,12 +187,12 @@ export default function CashMovements() {
 
   const resetFilters = () => {
     const dateStr = selectedAccountingDate || getPeruDateString();
-    setFilters({ start_date: dateStr, end_date: dateStr });
+    setFilters({ start_date: clampDate(dateStr), end_date: clampDate(dateStr) });
   };
 
   const handleExport = async () => {
     try {
-      await cashRegistersApi.exportMovementsExcel(filters);
+      await cashRegistersApi.exportMovementsExcel(effectiveFilters);
     } catch (error) {
       console.error('Error exporting cash movements:', error);
       alert('Error al exportar movimientos de caja');
@@ -198,7 +232,9 @@ export default function CashMovements() {
             <input
               type="date"
               value={filters.start_date || ''}
-              onChange={(e) => setFilters({ ...filters, start_date: e.target.value || undefined })}
+              min={isAdmin ? undefined : minVisibleDate}
+              max={isAdmin ? undefined : maxVisibleDate}
+              onChange={(e) => setFilters({ ...filters, start_date: clampDate(e.target.value || undefined) })}
             />
           </div>
           <div className="filter-group">
@@ -206,10 +242,12 @@ export default function CashMovements() {
             <input
               type="date"
               value={filters.end_date || ''}
-              onChange={(e) => setFilters({ ...filters, end_date: e.target.value || undefined })}
+              min={isAdmin ? undefined : minVisibleDate}
+              max={isAdmin ? undefined : maxVisibleDate}
+              onChange={(e) => setFilters({ ...filters, end_date: clampDate(e.target.value || undefined) })}
             />
           </div>
-          {user?.role === 'admin' && (
+          {isAdmin && (
             <div className="filter-group">
               <label>Usuario</label>
               <select
@@ -251,6 +289,9 @@ export default function CashMovements() {
               ))}
             </select>
           </div>
+          {!isAdmin && (
+            <small className="filter-note">Solo se muestran tus movimientos de los ultimos {historyDays} dias.</small>
+          )}
         </div>
       </div>
 
@@ -361,7 +402,11 @@ export default function CashMovements() {
             <tbody>
               {cashMovements.map((cm) => (
                 <tr key={cm.id}>
-                  <td>{cm.description || '-'}</td>
+                  <td>
+                    <strong>{cm.cash_account_name || '-'}</strong>
+                    <br />
+                    <small>{cm.description || '-'}</small>
+                  </td>
                   <td>{movementTypeLabel(cm.movement_type)}</td>
                   <td>{cm.payment_method_name || cm.payment_method || '-'}</td>
                   <td style={{ color: cm.amount < 0 ? 'var(--danger)' : 'var(--success)' }}>

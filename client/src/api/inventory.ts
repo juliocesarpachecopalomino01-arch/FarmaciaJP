@@ -13,11 +13,13 @@ export interface InventoryItem {
   unit_price: number;
 }
 
+export type InventoryMovementType = 'entry' | 'exit' | 'adjustment' | 'adjustment_positive' | 'adjustment_negative';
+
 export interface InventoryMovement {
   id: number;
   product_id: number;
   product_name: string;
-  movement_type: 'entry' | 'exit' | 'adjustment';
+  movement_type: InventoryMovementType;
   quantity: number;
   barcode?: string;
   category_name?: string;
@@ -29,7 +31,7 @@ export interface InventoryMovement {
 
 export interface InventoryMovementRequest {
   product_id: number;
-  movement_type: 'entry' | 'exit' | 'adjustment';
+  movement_type: InventoryMovementType;
   quantity: number;
   reference_number?: string;
   notes?: string;
@@ -38,7 +40,7 @@ export interface InventoryMovementRequest {
 export interface KardexMovement {
   id: number;
   created_at: string;
-  movement_type: 'entry' | 'exit' | 'adjustment';
+  movement_type: InventoryMovementType;
   reference_number?: string;
   notes?: string;
   user_name?: string;

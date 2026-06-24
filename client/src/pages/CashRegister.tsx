@@ -1,10 +1,18 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { cashRegistersApi, CashMovement, CashRegister, CloseCashRegisterResponse } from '../api/cashRegisters';
+import {
+  CashAccount,
+  CashDenomination,
+  cashRegistersApi,
+  CashMovement,
+  CashRegister,
+  CloseCashRegisterResponse,
+} from '../api/cashRegisters';
 import { salesApi, Sale } from '../api/sales';
 import { paymentMethodsApi } from '../api/paymentMethods';
+import { companySettingsApi } from '../api/companySettings';
 import { useAuth } from '../hooks/useAuth';
-import { FileText } from 'lucide-react';
+import { FileText, Plus, Settings, TrendingDown, TrendingUp } from 'lucide-react';
 import './Sales.css';
 
 function getLocalDateInputValue() {
@@ -15,17 +23,31 @@ function getLocalDateInputValue() {
   return `${year}-${month}-${day}`;
 }
 
+function getLocalDateInputValueOffset(daysOffset: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + daysOffset);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export default function CashRegisterPage() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
 
   const [showOpenCashModal, setShowOpenCashModal] = useState(false);
   const [showCloseCashModal, setShowCloseCashModal] = useState(false);
   const [showAuditCashModal, setShowAuditCashModal] = useState(false);
+  const [showManualMovementModal, setShowManualMovementModal] = useState(false);
+  const [showAccountsModal, setShowAccountsModal] = useState(false);
+  const [showDenominationsModal, setShowDenominationsModal] = useState(false);
   const [selectedClosedCash, setSelectedClosedCash] = useState<CashRegister | null>(null);
   const [auditPassword, setAuditPassword] = useState('');
   const [auditNotes, setAuditNotes] = useState('');
   const [closeSummary, setCloseSummary] = useState<CloseCashRegisterResponse | null>(null);
+  const [cashCount, setCashCount] = useState<Record<number, string>>({});
 
   const [cashForm, setCashForm] = useState({
     opening_balance: '',
@@ -34,16 +56,41 @@ export default function CashRegisterPage() {
     notes: '',
   });
 
+  const [manualMovementForm, setManualMovementForm] = useState({
+    movement_type: 'expense' as 'income' | 'expense',
+    amount: '',
+    payment_method: 'cash',
+    cash_account_id: '',
+    description: '',
+  });
+
+  const [cashAccountForm, setCashAccountForm] = useState({
+    name: '',
+    account_type: 'expense' as 'income' | 'expense' | 'both',
+    description: '',
+  });
+
+  const [denominationForm, setDenominationForm] = useState({
+    name: '',
+    value: '',
+  });
+
   const { data: currentCashRegister } = useQuery<CashRegister | null>(
     'cash-register-current',
     cashRegistersApi.getCurrent
   );
 
   const hasOpenCashRegister = Boolean(currentCashRegister);
+  const { data: companySettings } = useQuery('company-settings', companySettingsApi.get);
+  const historyDays = Math.max(1, Number(companySettings?.non_admin_history_days || 5));
 
   const { data: cashRegistersList } = useQuery(
-    ['cash-registers-list', user?.id],
-    () => cashRegistersApi.list(user?.id ? { user_id: user.id } : undefined),
+    ['cash-registers-list', user?.id, isAdmin, historyDays],
+    () => cashRegistersApi.list({
+      ...(user?.id ? { user_id: user.id } : {}),
+      ...(isAdmin ? {} : { start_date: getLocalDateInputValueOffset(-historyDays) }),
+      end_date: getLocalDateInputValue(),
+    }),
     { enabled: showAuditCashModal && !!user }
   );
 
@@ -68,6 +115,16 @@ export default function CashRegisterPage() {
 
   const { data: paymentMethods = [] } = useQuery('payment-methods', () => paymentMethodsApi.getAll());
 
+  const { data: cashAccounts = [] } = useQuery<CashAccount[]>(
+    'cash-accounts',
+    cashRegistersApi.getAccounts
+  );
+
+  const { data: cashDenominations = [] } = useQuery<CashDenomination[]>(
+    'cash-denominations',
+    cashRegistersApi.getDenominations
+  );
+
   const resetCashForm = () => {
     setCashForm({
       opening_balance: '',
@@ -75,7 +132,33 @@ export default function CashRegisterPage() {
       closing_balance: '',
       notes: '',
     });
+    setCashCount({});
     setCloseSummary(null);
+  };
+
+  const resetManualMovementForm = () => {
+    setManualMovementForm({
+      movement_type: 'expense',
+      amount: '',
+      payment_method: paymentMethods.find((method) => method.is_cash === 1)?.value || 'cash',
+      cash_account_id: '',
+      description: '',
+    });
+  };
+
+  const resetCashAccountForm = () => {
+    setCashAccountForm({
+      name: '',
+      account_type: 'expense',
+      description: '',
+    });
+  };
+
+  const resetDenominationForm = () => {
+    setDenominationForm({
+      name: '',
+      value: '',
+    });
   };
 
   const openCashMutation = useMutation(cashRegistersApi.open, {
@@ -122,6 +205,70 @@ export default function CashRegisterPage() {
     },
   });
 
+  const createManualMovementMutation = useMutation(cashRegistersApi.createManualMovement, {
+    onSuccess: () => {
+      queryClient.invalidateQueries(['cash-register-movements']);
+      queryClient.invalidateQueries('cash-register-current');
+      queryClient.invalidateQueries(['cash-registers-list']);
+      queryClient.invalidateQueries(['cash-movements-extra']);
+      queryClient.invalidateQueries(['cash-movements-sales']);
+      setShowManualMovementModal(false);
+      resetManualMovementForm();
+    },
+    onError: (error: any) => {
+      const message = error?.response?.data?.error || 'No se pudo registrar el movimiento de caja';
+      alert(message);
+    },
+  });
+
+  const createCashAccountMutation = useMutation(cashRegistersApi.createAccount, {
+    onSuccess: () => {
+      queryClient.invalidateQueries('cash-accounts');
+      resetCashAccountForm();
+    },
+    onError: (error: any) => {
+      const message = error?.response?.data?.error || 'No se pudo crear la cuenta de caja';
+      alert(message);
+    },
+  });
+
+  const updateCashAccountMutation = useMutation(
+    ({ id, data }: { id: number; data: Partial<CashAccount> }) => cashRegistersApi.updateAccount(id, data),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries('cash-accounts');
+      },
+      onError: (error: any) => {
+        const message = error?.response?.data?.error || 'No se pudo actualizar la cuenta de caja';
+        alert(message);
+      },
+    }
+  );
+
+  const createDenominationMutation = useMutation(cashRegistersApi.createDenomination, {
+    onSuccess: () => {
+      queryClient.invalidateQueries('cash-denominations');
+      resetDenominationForm();
+    },
+    onError: (error: any) => {
+      const message = error?.response?.data?.error || 'No se pudo crear la denominacion';
+      alert(message);
+    },
+  });
+
+  const updateDenominationMutation = useMutation(
+    ({ id, data }: { id: number; data: Partial<CashDenomination> }) => cashRegistersApi.updateDenomination(id, data),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries('cash-denominations');
+      },
+      onError: (error: any) => {
+        const message = error?.response?.data?.error || 'No se pudo actualizar la denominacion';
+        alert(message);
+      },
+    }
+  );
+
   const calculateExpectedBalance = () => {
     if (!currentCashRegister) return 0;
 
@@ -140,6 +287,21 @@ export default function CashRegisterPage() {
   const cashMovementsTotal = currentCashMovements.reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
 
   const expectedBalance = calculateExpectedBalance();
+  const minCashAccountingDate = getLocalDateInputValueOffset(-historyDays);
+  const maxCashAccountingDate = getLocalDateInputValue();
+  const activeCashDenominations = cashDenominations.filter((denomination) => denomination.is_active === 1);
+  const countedCashTotal = activeCashDenominations.reduce((sum, denomination) => {
+    const quantity = Math.max(0, Math.floor(Number(cashCount[denomination.id] || 0)));
+    return sum + quantity * Number(denomination.value || 0);
+  }, 0);
+  const closeDifference = countedCashTotal - expectedBalance;
+
+  const activeAccountsForMovement = cashAccounts.filter((account) => {
+    if (account.is_active !== 1) return false;
+    return account.account_type === 'both' || account.account_type === manualMovementForm.movement_type;
+  });
+
+  const recentCashMovements = currentCashMovements.slice(0, 6);
 
   const formatAccountingDate = (isoDate: string) => {
     try {
@@ -160,7 +322,13 @@ export default function CashRegisterPage() {
   };
 
   const closedCashRegisters = (cashRegistersList || [])
-    .filter((cr) => (cr.status === 'closed' || !!cr.closed_at))
+    .filter((cr) => {
+      const minDate = getLocalDateInputValueOffset(-historyDays);
+      const today = getLocalDateInputValue();
+      return (cr.status === 'closed' || !!cr.closed_at)
+        && (isAdmin || cr.accounting_date >= minDate)
+        && cr.accounting_date <= today;
+    })
     .sort((a, b) => {
       const aKey = `${a.accounting_date || ''} ${a.closed_at || ''}`;
       const bKey = `${b.accounting_date || ''} ${b.closed_at || ''}`;
@@ -204,6 +372,33 @@ export default function CashRegisterPage() {
             <div className="cash-register-actions">
               <button
                 className="btn-secondary"
+                type="button"
+                onClick={() => {
+                  resetManualMovementForm();
+                  setShowManualMovementModal(true);
+                }}
+              >
+                <Plus size={14} />
+                Ingreso / Salida
+              </button>
+              <button
+                className="btn-secondary"
+                type="button"
+                onClick={() => setShowAccountsModal(true)}
+              >
+                <Settings size={14} />
+                Cuentas
+              </button>
+              <button
+                className="btn-secondary"
+                type="button"
+                onClick={() => setShowDenominationsModal(true)}
+              >
+                <Settings size={14} />
+                Denominaciones
+              </button>
+              <button
+                className="btn-secondary"
                 onClick={() => { resetCashForm(); setShowCloseCashModal(true); }}
               >
                 Cerrar Caja
@@ -230,6 +425,338 @@ export default function CashRegisterPage() {
         )}
       </div>
 
+      {hasOpenCashRegister && (
+        <div className="cash-register-card cash-extra-panel">
+          <div className="cash-extra-summary">
+            <div>
+              <span className="cash-extra-label">Otros movimientos</span>
+              <strong className={cashMovementsTotal < 0 ? 'cash-amount-negative' : 'cash-amount-positive'}>
+                S/ {cashMovementsTotal.toFixed(2)}
+              </strong>
+            </div>
+            <small>Ingresos y salidas manuales, compras y devoluciones asociadas a esta caja.</small>
+          </div>
+          <div className="cash-extra-list">
+            {recentCashMovements.length === 0 ? (
+              <span className="cash-extra-empty">Sin movimientos adicionales</span>
+            ) : (
+              recentCashMovements.map((movement) => (
+                <div key={movement.id} className="cash-extra-item">
+                  <span>{movement.cash_account_name || movement.description || movement.movement_type}</span>
+                  <strong className={Number(movement.amount) < 0 ? 'cash-amount-negative' : 'cash-amount-positive'}>
+                    {Number(movement.amount) < 0 ? '-' : '+'}S/ {Math.abs(Number(movement.amount || 0)).toFixed(2)}
+                  </strong>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {showManualMovementModal && currentCashRegister && (
+        <div className="modal-overlay" onClick={() => { setShowManualMovementModal(false); resetManualMovementForm(); }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h2>Registrar ingreso / salida</h2>
+            <p className="modal-subtitle">
+              Afecta la caja abierta de {currentCashRegister.full_name || currentCashRegister.username}.
+            </p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!manualMovementForm.cash_account_id) {
+                  alert('Selecciona una cuenta de caja');
+                  return;
+                }
+                createManualMovementMutation.mutate({
+                  movement_type: manualMovementForm.movement_type,
+                  amount: Number(manualMovementForm.amount || 0),
+                  payment_method: manualMovementForm.payment_method || 'cash',
+                  cash_account_id: Number(manualMovementForm.cash_account_id),
+                  description: manualMovementForm.description || undefined,
+                });
+              }}
+            >
+              <div className="cash-movement-type-grid">
+                <button
+                  type="button"
+                  className={`cash-movement-type ${manualMovementForm.movement_type === 'income' ? 'active income' : ''}`}
+                  onClick={() => setManualMovementForm({ ...manualMovementForm, movement_type: 'income', cash_account_id: '' })}
+                >
+                  <TrendingUp size={15} />
+                  Ingreso
+                </button>
+                <button
+                  type="button"
+                  className={`cash-movement-type ${manualMovementForm.movement_type === 'expense' ? 'active expense' : ''}`}
+                  onClick={() => setManualMovementForm({ ...manualMovementForm, movement_type: 'expense', cash_account_id: '' })}
+                >
+                  <TrendingDown size={15} />
+                  Salida
+                </button>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Cuenta *</label>
+                  <select
+                    value={manualMovementForm.cash_account_id}
+                    onChange={(e) => setManualMovementForm({ ...manualMovementForm, cash_account_id: e.target.value })}
+                    required
+                  >
+                    <option value="">Seleccionar cuenta</option>
+                    {activeAccountsForMovement.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Metodo *</label>
+                  <select
+                    value={manualMovementForm.payment_method}
+                    onChange={(e) => setManualMovementForm({ ...manualMovementForm, payment_method: e.target.value })}
+                    required
+                  >
+                    {paymentMethods
+                      .filter((method) => method.is_active !== 0)
+                      .map((method) => (
+                        <option key={method.value} value={method.value}>
+                          {method.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Monto *</label>
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={manualMovementForm.amount}
+                  onChange={(e) => setManualMovementForm({ ...manualMovementForm, amount: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Detalle</label>
+                <textarea
+                  rows={3}
+                  value={manualMovementForm.description}
+                  onChange={(e) => setManualMovementForm({ ...manualMovementForm, description: e.target.value })}
+                  placeholder="Ej. almuerzo, movilidad, sobrante, pago menor..."
+                />
+              </div>
+              <div className="expected-balance-row">
+                <span>Impacto en caja</span>
+                <span className={manualMovementForm.movement_type === 'income' ? 'cash-amount-positive' : 'cash-amount-negative'}>
+                  {manualMovementForm.movement_type === 'income' ? '+' : '-'} S/ {(Number(manualMovementForm.amount || 0)).toFixed(2)}
+                </span>
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => { setShowManualMovementModal(false); resetManualMovementForm(); }}
+                >
+                  Cancelar
+                </button>
+                <button type="submit" className="btn-primary" disabled={createManualMovementMutation.isLoading}>
+                  {createManualMovementMutation.isLoading ? 'Registrando...' : 'Registrar movimiento'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showAccountsModal && (
+        <div className="modal-overlay" onClick={() => { setShowAccountsModal(false); resetCashAccountForm(); }}>
+          <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
+            <h2>Cuentas de caja</h2>
+            <p className="modal-subtitle">
+              Configura las cuentas que se usaran para ingresos y salidas manuales.
+            </p>
+            <div className="cash-accounts-layout">
+              <div className="cash-accounts-list">
+                {cashAccounts.map((account) => (
+                  <div key={account.id} className={`cash-account-row ${account.is_active === 1 ? '' : 'inactive'}`}>
+                    <div>
+                      <strong>{account.name}</strong>
+                      <span>
+                        {account.account_type === 'income'
+                          ? 'Ingreso'
+                          : account.account_type === 'expense'
+                            ? 'Salida'
+                            : 'Ingreso y salida'}
+                      </span>
+                      {account.description && <small>{account.description}</small>}
+                    </div>
+                    <button
+                      type="button"
+                      className={account.is_active === 1 ? 'btn-secondary' : 'btn-primary'}
+                      onClick={() =>
+                        updateCashAccountMutation.mutate({
+                          id: account.id,
+                          data: { is_active: account.is_active === 1 ? 0 : 1 },
+                        })
+                      }
+                    >
+                      {account.is_active === 1 ? 'Desactivar' : 'Activar'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <form
+                className="cash-account-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  createCashAccountMutation.mutate({
+                    name: cashAccountForm.name,
+                    account_type: cashAccountForm.account_type,
+                    description: cashAccountForm.description || undefined,
+                  });
+                }}
+              >
+                <h3>Nueva cuenta</h3>
+                <div className="form-group">
+                  <label>Nombre *</label>
+                  <input
+                    value={cashAccountForm.name}
+                    onChange={(e) => setCashAccountForm({ ...cashAccountForm, name: e.target.value })}
+                    placeholder="Ej. Almuerzo"
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Tipo *</label>
+                  <select
+                    value={cashAccountForm.account_type}
+                    onChange={(e) =>
+                      setCashAccountForm({
+                        ...cashAccountForm,
+                        account_type: e.target.value as 'income' | 'expense' | 'both',
+                      })
+                    }
+                    required
+                  >
+                    <option value="expense">Salida</option>
+                    <option value="income">Ingreso</option>
+                    <option value="both">Ingreso y salida</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Descripcion</label>
+                  <textarea
+                    rows={3}
+                    value={cashAccountForm.description}
+                    onChange={(e) => setCashAccountForm({ ...cashAccountForm, description: e.target.value })}
+                  />
+                </div>
+                <button type="submit" className="btn-primary" disabled={createCashAccountMutation.isLoading}>
+                  {createCashAccountMutation.isLoading ? 'Creando...' : 'Crear cuenta'}
+                </button>
+              </form>
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => { setShowAccountsModal(false); resetCashAccountForm(); }}
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDenominationsModal && (
+        <div className="modal-overlay" onClick={() => { setShowDenominationsModal(false); resetDenominationForm(); }}>
+          <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
+            <h2>Denominaciones de efectivo</h2>
+            <p className="modal-subtitle">
+              Configura las monedas y billetes que apareceran en el reconteo de cierre.
+            </p>
+            <div className="cash-accounts-layout">
+              <div className="cash-denomination-list">
+                {cashDenominations.map((denomination) => (
+                  <div key={denomination.id} className={`cash-denomination-row ${denomination.is_active === 1 ? '' : 'inactive'}`}>
+                    <div>
+                      <strong>{denomination.name}</strong>
+                      <span>S/ {Number(denomination.value || 0).toFixed(2)}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className={denomination.is_active === 1 ? 'btn-secondary' : 'btn-primary'}
+                      onClick={() =>
+                        updateDenominationMutation.mutate({
+                          id: denomination.id,
+                          data: { is_active: denomination.is_active === 1 ? 0 : 1 },
+                        })
+                      }
+                    >
+                      {denomination.is_active === 1 ? 'Desactivar' : 'Activar'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <form
+                className="cash-account-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const value = Number(denominationForm.value || 0);
+                  if (value <= 0) {
+                    alert('Ingresa un valor mayor a cero');
+                    return;
+                  }
+                  createDenominationMutation.mutate({
+                    name: denominationForm.name || `S/ ${value.toFixed(2)}`,
+                    value,
+                    sort_order: Math.round(value * 100),
+                  });
+                }}
+              >
+                <h3>Nueva denominacion</h3>
+                <div className="form-group">
+                  <label>Nombre *</label>
+                  <input
+                    value={denominationForm.name}
+                    onChange={(e) => setDenominationForm({ ...denominationForm, name: e.target.value })}
+                    placeholder="Ej. S/ 10.00"
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Valor *</label>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={denominationForm.value}
+                    onChange={(e) => setDenominationForm({ ...denominationForm, value: e.target.value })}
+                    placeholder="10.00"
+                    required
+                  />
+                </div>
+                <button type="submit" className="btn-primary" disabled={createDenominationMutation.isLoading}>
+                  {createDenominationMutation.isLoading ? 'Creando...' : 'Crear denominacion'}
+                </button>
+              </form>
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => { setShowDenominationsModal(false); resetDenominationForm(); }}
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showOpenCashModal && (
         <div className="modal-overlay" onClick={() => { setShowOpenCashModal(false); resetCashForm(); }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -240,6 +767,10 @@ export default function CashRegisterPage() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                if (cashForm.accounting_date > maxCashAccountingDate || (!isAdmin && cashForm.accounting_date < minCashAccountingDate)) {
+                  alert(`Solo puedes abrir caja con fecha contable de los ultimos ${historyDays} dias.`);
+                  return;
+                }
                 openCashMutation.mutate({
                   opening_balance: cashForm.opening_balance ? Number(cashForm.opening_balance) : 0,
                   accounting_date: cashForm.accounting_date || undefined,
@@ -253,9 +784,16 @@ export default function CashRegisterPage() {
                   <input
                     type="date"
                     value={cashForm.accounting_date}
+                    min={isAdmin ? undefined : minCashAccountingDate}
+                    max={maxCashAccountingDate}
                     onChange={(e) => setCashForm({ ...cashForm, accounting_date: e.target.value })}
                     required
                   />
+                  <small>
+                    {isAdmin
+                      ? `Permitido hasta ${formatAccountingDate(maxCashAccountingDate)}.`
+                      : `Permitido desde ${formatAccountingDate(minCashAccountingDate)} hasta ${formatAccountingDate(maxCashAccountingDate)}.`}
+                  </small>
                 </div>
                 <div className="form-group">
                   <label>Saldo inicial</label>
@@ -352,6 +890,19 @@ export default function CashRegisterPage() {
                     </ul>
                   </div>
                 )}
+                {closeSummary.summary.cash_count && closeSummary.summary.cash_count.length > 0 && (
+                  <div className="cash-summary-methods">
+                    <h4>Reconteo de efectivo</h4>
+                    <ul>
+                      {closeSummary.summary.cash_count.map((row) => (
+                        <li key={row.denomination_id}>
+                          <span>{row.denomination_name} x {row.quantity}</span>
+                          <span>S/ {row.total.toFixed(2)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
 
@@ -359,10 +910,16 @@ export default function CashRegisterPage() {
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
+                  if (activeCashDenominations.length === 0) {
+                    alert('Activa al menos una denominacion para cerrar la caja con reconteo.');
+                    return;
+                  }
                   closeCashMutation.mutate({
-                    closing_balance: cashForm.closing_balance
-                      ? Number(cashForm.closing_balance)
-                      : undefined,
+                    closing_balance: Number(countedCashTotal.toFixed(2)),
+                    denomination_counts: activeCashDenominations.map((denomination) => ({
+                      denomination_id: denomination.id,
+                      quantity: Math.max(0, Math.floor(Number(cashCount[denomination.id] || 0))),
+                    })),
                     notes: cashForm.notes || undefined,
                   });
                 }}
@@ -378,38 +935,62 @@ export default function CashRegisterPage() {
                   {cashMovementsTotal !== 0 ? ` (S/ ${cashMovementsTotal.toFixed(2)})` : ''}
                 </p>
 
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>Saldo real de cierre *</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={cashForm.closing_balance}
-                      onChange={(e) => setCashForm({ ...cashForm, closing_balance: e.target.value })}
-                      placeholder="Ingrese el monto real contado"
-                    />
+                <div className="cash-count-box">
+                  <div className="cash-count-header">
+                    <div>
+                      <strong>Reconteo de efectivo</strong>
+                      <small>Ingresa la cantidad física por moneda o billete.</small>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setShowDenominationsModal(true)}
+                    >
+                      Configurar
+                    </button>
                   </div>
-                  <div className="form-group">
-                    <label>Diferencia</label>
-                    <input
-                      type="number"
-                      value={
-                        cashForm.closing_balance
-                          ? (Number(cashForm.closing_balance) - expectedBalance).toFixed(2)
-                          : '0.00'
-                      }
-                      disabled
-                      style={{
-                        color:
-                          cashForm.closing_balance && Number(cashForm.closing_balance) < expectedBalance
-                            ? 'var(--danger-dark)'
-                            : 'var(--success-dark)',
-                        fontWeight: '700',
-                      }}
-                    />
+                  <div className="cash-count-grid">
+                    {activeCashDenominations.map((denomination) => {
+                      const quantity = Math.max(0, Math.floor(Number(cashCount[denomination.id] || 0)));
+                      const lineTotal = quantity * Number(denomination.value || 0);
+                      return (
+                        <div key={denomination.id} className="cash-count-row">
+                          <span>{denomination.name}</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={cashCount[denomination.id] || ''}
+                            onChange={(e) =>
+                              setCashCount({
+                                ...cashCount,
+                                [denomination.id]: e.target.value,
+                              })
+                            }
+                            placeholder="0"
+                          />
+                          <strong>S/ {lineTotal.toFixed(2)}</strong>
+                        </div>
+                      );
+                    })}
+                    {activeCashDenominations.length === 0 && (
+                      <div className="cash-count-empty">
+                        No hay denominaciones activas. Configura al menos una para cerrar caja.
+                      </div>
+                    )}
+                  </div>
+                  <div className="cash-count-total-row">
+                    <span>Total contado</span>
+                    <strong>S/ {countedCashTotal.toFixed(2)}</strong>
+                  </div>
+                  <div className="cash-count-total-row">
+                    <span>Diferencia</span>
+                    <strong className={closeDifference < 0 ? 'cash-amount-negative' : 'cash-amount-positive'}>
+                      S/ {closeDifference.toFixed(2)}
+                    </strong>
                   </div>
                 </div>
+
                 <div className="form-group">
                   <label>Notas</label>
                   <textarea

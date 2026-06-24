@@ -11,13 +11,124 @@ const movementLabels = {
   entry: 'Entrada',
   exit: 'Salida',
   adjustment: 'Ajuste',
+  adjustment_positive: 'Ajuste positivo',
+  adjustment_negative: 'Ajuste negativo',
 };
 
 const movementIcons = {
   entry: ArrowDownToLine,
   exit: ArrowUpFromLine,
   adjustment: RotateCcw,
+  adjustment_positive: ArrowDownToLine,
+  adjustment_negative: ArrowUpFromLine,
 };
+
+function getProductLabel(product: Product) {
+  return [product.name, product.laboratory].filter(Boolean).join(' | ');
+}
+
+function productMatchesSearch(product: Product, search: string) {
+  const query = search.trim().toLowerCase();
+  if (!query) return true;
+
+  return [
+    product.name,
+    product.barcode,
+    product.laboratory,
+    product.presentation,
+    product.lot_number,
+    product.sanitary_registration,
+    product.category_name,
+  ].some((value) => String(value || '').toLowerCase().includes(query));
+}
+
+type ProductSearchFilterProps = {
+  products: Product[];
+  value: string;
+  search: string;
+  allowAll?: boolean;
+  placeholder?: string;
+  onSearchChange: (value: string) => void;
+  onChange: (productId: string) => void;
+};
+
+function ProductSearchFilter({
+  products,
+  value,
+  search,
+  allowAll = false,
+  placeholder = 'Buscar producto...',
+  onSearchChange,
+  onChange,
+}: ProductSearchFilterProps) {
+  const [open, setOpen] = useState(false);
+  const filteredProducts = useMemo(
+    () => products.filter((product) => productMatchesSearch(product, search)),
+    [products, search]
+  );
+
+  const handleTextChange = (text: string) => {
+    onSearchChange(text);
+    onChange('');
+    setOpen(true);
+  };
+
+  const handleSelectProduct = (product: Product) => {
+    onChange(String(product.id));
+    onSearchChange(getProductLabel(product));
+    setOpen(false);
+  };
+
+  const handleSelectAll = () => {
+    onChange('');
+    onSearchChange('');
+    setOpen(false);
+  };
+
+  return (
+    <div className="product-search-filter">
+      <input
+        type="text"
+        value={search}
+        placeholder={value ? '' : placeholder}
+        onChange={(event) => handleTextChange(event.target.value)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        autoComplete="off"
+      />
+      {open && (
+        <div className="product-search-filter-menu">
+          {allowAll && (
+            <button
+              type="button"
+              className={!value && !search ? 'active' : ''}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleSelectAll}
+            >
+              <strong>Todos</strong>
+              <span>Mostrar todos los productos</span>
+            </button>
+          )}
+          {filteredProducts.map((product) => (
+            <button
+              type="button"
+              key={product.id}
+              className={String(product.id) === value ? 'active' : ''}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => handleSelectProduct(product)}
+            >
+              <strong>{getProductLabel(product)}</strong>
+              <span>{product.barcode || product.category_name || '-'}</span>
+            </button>
+          ))}
+          {filteredProducts.length === 0 && (
+            <div className="product-search-filter-empty">No se encontraron productos</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function formatDate(value?: string) {
   if (!value) return '-';
@@ -67,11 +178,13 @@ export default function ProductMovementsReport() {
     start_date: '',
     end_date: '',
   });
+  const [movementProductSearch, setMovementProductSearch] = useState('');
   const [kardexFilters, setKardexFilters] = useState({
     product_id: '',
     start_date: '',
     end_date: '',
   });
+  const [kardexProductSearch, setKardexProductSearch] = useState('');
 
   useEffect(() => {
     productsApi.getAll({ is_active: 1, limit: 1000 }).then((response) => {
@@ -81,6 +194,7 @@ export default function ProductMovementsReport() {
           ...current,
           product_id: String(response.products[0].id),
         });
+        setKardexProductSearch((current) => current || getProductLabel(response.products[0]));
       }
     });
   }, []);
@@ -133,7 +247,9 @@ export default function ProductMovementsReport() {
         const quantity = Number(movement.quantity) || 0;
         if (movement.movement_type === 'entry') summary.entries += quantity;
         if (movement.movement_type === 'exit') summary.exits += quantity;
-        if (movement.movement_type === 'adjustment') summary.adjustments += 1;
+        if (movement.movement_type === 'adjustment' || movement.movement_type === 'adjustment_positive' || movement.movement_type === 'adjustment_negative') {
+          summary.adjustments += 1;
+        }
         return summary;
       },
       { entries: 0, exits: 0, adjustments: 0 }
@@ -176,15 +292,15 @@ export default function ProductMovementsReport() {
             <div className="filter-grid">
               <label>
                 Producto
-                <select
+                <ProductSearchFilter
+                  products={products}
                   value={movementFilters.product_id}
-                  onChange={(event) => setMovementFilters({ ...movementFilters, product_id: event.target.value })}
-                >
-                  <option value="">Todos</option>
-                  {products.map((product) => (
-                    <option key={product.id} value={product.id}>{product.name}</option>
-                  ))}
-                </select>
+                  search={movementProductSearch}
+                  allowAll
+                  placeholder="Todos"
+                  onSearchChange={setMovementProductSearch}
+                  onChange={(productId) => setMovementFilters({ ...movementFilters, product_id: productId })}
+                />
               </label>
               <label>
                 Tipo
@@ -195,7 +311,8 @@ export default function ProductMovementsReport() {
                   <option value="">Todos</option>
                   <option value="entry">Entrada</option>
                   <option value="exit">Salida</option>
-                  <option value="adjustment">Ajuste</option>
+                  <option value="adjustment_positive">Ajuste positivo</option>
+                  <option value="adjustment_negative">Ajuste negativo</option>
                 </select>
               </label>
               <label>
@@ -295,14 +412,14 @@ export default function ProductMovementsReport() {
             <div className="filter-grid kardex-filter-grid">
               <label>
                 Producto
-                <select
+                <ProductSearchFilter
+                  products={products}
                   value={kardexFilters.product_id}
-                  onChange={(event) => setKardexFilters({ ...kardexFilters, product_id: event.target.value })}
-                >
-                  {products.map((product) => (
-                    <option key={product.id} value={product.id}>{product.name}</option>
-                  ))}
-                </select>
+                  search={kardexProductSearch}
+                  placeholder="Escribe para buscar producto..."
+                  onSearchChange={setKardexProductSearch}
+                  onChange={(productId) => setKardexFilters({ ...kardexFilters, product_id: productId })}
+                />
               </label>
               <label>
                 Desde

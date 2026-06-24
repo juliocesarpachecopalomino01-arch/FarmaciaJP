@@ -158,6 +158,70 @@
   border-color: var(--primary);
 }
 
+.products-combobox {
+  position: relative;
+  width: 100%;
+}
+
+.products-combobox input {
+  width: 100%;
+  min-height: 2.2rem;
+  padding: 0.55rem 0.75rem;
+  border: 2px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--background);
+  color: var(--text);
+  font-size: 0.86rem;
+  transition: all 0.2s ease;
+}
+
+.products-combobox input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
+  background: white;
+}
+
+.products-combobox-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  z-index: 45;
+  max-height: 18rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18);
+}
+
+.products-combobox-menu button {
+  width: 100%;
+  display: block;
+  padding: 0.55rem 0.75rem;
+  border: 0;
+  border-bottom: 1px solid var(--border-light);
+  background: transparent;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.products-combobox-menu button:hover,
+.products-combobox-menu button.active {
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.12), rgba(16, 185, 129, 0.1));
+}
+
+.products-combobox-empty {
+  padding: 0.75rem;
+  color: var(--text-light);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
 .table-container {
   background: var(--surface);
   border-radius: 0.75rem;
@@ -846,6 +910,42 @@ tbody tr {
 
 @media (max-width: 640px) {
   .products-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.presentation-manager {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 0.9rem;
+  align-items: start;
+}
+
+.presentation-list {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.presentation-form {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  padding: 0.75rem;
+}
+
+.presentation-form h3 {
+  margin: 0 0 0.65rem;
+  font-size: 0.9rem;
+}
+
+.table-subtext {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-light);
+  font-size: 0.72rem;
+}
+
+@media (max-width: 980px) {
+  .presentation-manager {
     grid-template-columns: 1fr;
   }
 }

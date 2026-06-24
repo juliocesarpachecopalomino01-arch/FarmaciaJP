@@ -2,15 +2,53 @@ import express, { Response } from 'express';
 import { query } from 'express-validator';
 import { db } from '../database/init';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { getNonAdminHistoryDays } from '../utils/companySettings';
 
 const router = express.Router();
+
+function getPeruDateString() {
+  const now = new Date();
+  const peruDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Lima' }));
+  return peruDate.toISOString().slice(0, 10);
+}
+
+function getPeruDateStringOffset(daysOffset: number) {
+  const [year, month, day] = getPeruDateString().split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + daysOffset);
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+async function getEffectiveReportDates(req: AuthRequest, startDate?: any, endDate?: any) {
+  const isAdmin = req.user?.role === 'admin';
+  const historyDays = await getNonAdminHistoryDays();
+  const minVisibleDate = getPeruDateStringOffset(-historyDays);
+  const maxVisibleDate = getPeruDateString();
+  const clampDate = (date: any, fallback: string) => {
+    if (!date) return fallback;
+    const value = String(date);
+    if (value < minVisibleDate) return minVisibleDate;
+    if (value > maxVisibleDate) return maxVisibleDate;
+    return value;
+  };
+
+  return {
+    isAdmin,
+    startDate: isAdmin ? startDate : clampDate(startDate, minVisibleDate),
+    endDate: isAdmin ? endDate : clampDate(endDate, maxVisibleDate),
+  };
+}
 
 // Sales report
 router.get('/sales', authenticateToken, [
   query('start_date').optional(),
   query('end_date').optional(),
-], (req: AuthRequest, res: Response) => {
+], async (req: AuthRequest, res: Response) => {
   const { start_date, end_date } = req.query;
+  const { isAdmin, startDate, endDate } = await getEffectiveReportDates(req, start_date, end_date);
 
   let query = `
     SELECT 
@@ -25,14 +63,19 @@ router.get('/sales', authenticateToken, [
   `;
   const params: any[] = [];
 
-  if (start_date) {
-    query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
-    params.push(start_date);
+  if (!isAdmin) {
+    query += ' AND s.user_id = ?';
+    params.push(req.user!.id);
   }
 
-  if (end_date) {
+  if (startDate) {
+    query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
+    params.push(startDate);
+  }
+
+  if (endDate) {
     query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
-    params.push(end_date);
+    params.push(endDate);
   }
 
   query += ' GROUP BY COALESCE(cr.accounting_date, DATE(s.created_at)) ORDER BY date DESC';
@@ -57,13 +100,18 @@ router.get('/sales', authenticateToken, [
     `;
     const summaryParams: any[] = [];
 
-    if (start_date) {
-      summaryQuery += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
-      summaryParams.push(start_date);
+    if (!isAdmin) {
+      summaryQuery += ' AND s.user_id = ?';
+      summaryParams.push(req.user!.id);
     }
-    if (end_date) {
+
+    if (startDate) {
+      summaryQuery += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
+      summaryParams.push(startDate);
+    }
+    if (endDate) {
       summaryQuery += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
-      summaryParams.push(end_date);
+      summaryParams.push(endDate);
     }
 
     db.get(summaryQuery, summaryParams, (err, summary: any) => {
@@ -100,8 +148,9 @@ router.get('/top-products', authenticateToken, [
   query('start_date').optional(),
   query('end_date').optional(),
   query('limit').optional().isInt(),
-], (req: AuthRequest, res: Response) => {
+], async (req: AuthRequest, res: Response) => {
   const { start_date, end_date, limit = 10 } = req.query;
+  const { isAdmin, startDate, endDate } = await getEffectiveReportDates(req, start_date, end_date);
 
   let query = `
     SELECT 
@@ -118,14 +167,19 @@ router.get('/top-products', authenticateToken, [
   `;
   const params: any[] = [];
 
-  if (start_date) {
-    query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
-    params.push(start_date);
+  if (!isAdmin) {
+    query += ' AND s.user_id = ?';
+    params.push(req.user!.id);
   }
 
-  if (end_date) {
+  if (startDate) {
+    query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
+    params.push(startDate);
+  }
+
+  if (endDate) {
     query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
-    params.push(end_date);
+    params.push(endDate);
   }
 
   query += `
@@ -147,8 +201,9 @@ router.get('/products-sold-by-user', authenticateToken, [
   query('start_date').optional(),
   query('end_date').optional(),
   query('user_id').optional().isInt(),
-], (req: AuthRequest, res: Response) => {
+], async (req: AuthRequest, res: Response) => {
   const { start_date, end_date, user_id } = req.query;
+  const { isAdmin, startDate, endDate } = await getEffectiveReportDates(req, start_date, end_date);
 
   let sql = `
     SELECT
@@ -176,15 +231,18 @@ router.get('/products-sold-by-user', authenticateToken, [
   `;
   const params: any[] = [];
 
-  if (start_date) {
+  if (startDate) {
     sql += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
-    params.push(start_date);
+    params.push(startDate);
   }
-  if (end_date) {
+  if (endDate) {
     sql += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
-    params.push(end_date);
+    params.push(endDate);
   }
-  if (user_id) {
+  if (!isAdmin) {
+    sql += ' AND u.id = ?';
+    params.push(req.user!.id);
+  } else if (user_id) {
     sql += ' AND u.id = ?';
     params.push(user_id);
   }
@@ -222,8 +280,9 @@ router.get('/products-sold-by-user', authenticateToken, [
 router.get('/profit', authenticateToken, [
   query('start_date').optional(),
   query('end_date').optional(),
-], (req: AuthRequest, res: Response) => {
+], async (req: AuthRequest, res: Response) => {
   const { start_date, end_date } = req.query;
+  const { isAdmin, startDate, endDate } = await getEffectiveReportDates(req, start_date, end_date);
 
   let sql = `
     SELECT
@@ -267,14 +326,19 @@ router.get('/profit', authenticateToken, [
   `;
   const params: any[] = [];
 
-  if (start_date) {
-    sql += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
-    params.push(start_date);
+  if (!isAdmin) {
+    sql += ' AND s.user_id = ?';
+    params.push(req.user!.id);
   }
 
-  if (end_date) {
+  if (startDate) {
+    sql += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
+    params.push(startDate);
+  }
+
+  if (endDate) {
     sql += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
-    params.push(end_date);
+    params.push(endDate);
   }
 
   sql += ' ORDER BY s.created_at DESC, p.name';

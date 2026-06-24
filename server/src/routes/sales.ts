@@ -3,6 +3,7 @@ import { body, validationResult, query } from 'express-validator';
 import { db } from '../database/init';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { logAction } from '../middleware/audit';
+import { getNonAdminHistoryDays } from '../utils/companySettings';
 
 const router = express.Router();
 
@@ -58,6 +59,15 @@ function getOpenCashRegister(userId: number): Promise<{ id: number }> {
       }
     );
   });
+}
+
+function getPeruDateStringOffset(daysOffset: number): string {
+  const peruNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Lima' }));
+  peruNow.setDate(peruNow.getDate() + daysOffset);
+  const y = peruNow.getFullYear();
+  const m = String(peruNow.getMonth() + 1).padStart(2, '0');
+  const d = String(peruNow.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 // Get all sales
@@ -201,12 +211,19 @@ router.get('/', authenticateToken, [
 });
 
 // Get sales available for return (with items not fully returned)
-router.get('/available-for-return', authenticateToken, (req: AuthRequest, res) => {
-  db.all(
-    `SELECT DISTINCT s.*, COALESCE(pm.name, s.payment_method) as payment_method_name, c.name as customer_name, u.username as user_name
+router.get('/available-for-return', authenticateToken, async (req: AuthRequest, res) => {
+  const isAdmin = req.user?.role === 'admin';
+  const historyDays = await getNonAdminHistoryDays();
+  const minVisibleDate = getPeruDateStringOffset(-historyDays);
+  const maxVisibleDate = getPeruDateStringOffset(0);
+
+  let sql = `
+     SELECT DISTINCT s.*, COALESCE(pm.name, s.payment_method) as payment_method_name, c.name as customer_name, u.username as user_name,
+            COALESCE(cr.accounting_date, DATE(s.created_at)) as cash_accounting_date
      FROM sales s
      LEFT JOIN customers c ON s.customer_id = c.id
      LEFT JOIN payment_methods pm ON pm.value = s.payment_method
+     LEFT JOIN cash_registers cr ON cr.id = s.cash_register_id
      INNER JOIN users u ON s.user_id = u.id
      INNER JOIN sale_items si ON s.id = si.sale_id
      LEFT JOIN (
@@ -215,9 +232,21 @@ router.get('/available-for-return', authenticateToken, (req: AuthRequest, res) =
        GROUP BY sale_item_id
      ) ri ON si.id = ri.sale_item_id
      WHERE COALESCE(ri.returned_quantity, 0) < si.quantity
+  `;
+  const params: any[] = [];
+
+  if (!isAdmin) {
+    sql += ' AND s.user_id = ? AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ? AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
+    params.push(req.user!.id, minVisibleDate, maxVisibleDate);
+  }
+
+  sql += `
      ORDER BY s.created_at DESC
-     LIMIT 100`,
-    [],
+     LIMIT 100`;
+
+  db.all(
+    sql,
+    params,
     (err, sales) => {
       if (err) {
         console.error('Error fetching available sales:', err);
@@ -315,11 +344,17 @@ router.post('/', authenticateToken, [
 
       items.forEach((item: any, index: number) => {
         db.get(
-          `SELECT p.*, COALESCE(i.quantity, 0) as stock
+          `SELECT p.*, COALESCE(i.quantity, 0) as stock,
+                  pp.id as presentation_id,
+                  pp.name as presentation_name,
+                  pp.conversion_factor as presentation_factor,
+                  pp.unit_price as presentation_unit_price,
+                  pp.cost_price as presentation_cost_price
            FROM products p
            LEFT JOIN inventory i ON p.id = i.product_id
+           LEFT JOIN product_presentations pp ON pp.id = ? AND pp.product_id = p.id AND pp.is_active = 1
            WHERE p.id = ? AND p.is_active = 1`,
-          [item.product_id],
+          [item.presentation_id || null, item.product_id],
           (err, product: any) => {
             processed++;
 
@@ -327,26 +362,42 @@ router.post('/', authenticateToken, [
               errors.push(`Error checking product ${item.product_id}`);
             } else if (!product) {
               errors.push(`Product ${item.product_id} not found`);
-            } else if (product.stock < item.quantity) {
-              errors.push(`Insufficient stock for ${product.name}`);
             } else {
-              const unitPrice = item.unit_price || product.unit_price;
-              const itemDiscount = item.discount || 0;
-              const subtotal = (unitPrice * item.quantity) - itemDiscount;
-              const bonusPerUnit = product.has_sales_bonus ? Number(product.sales_bonus_per_unit || 0) : 0;
-              const bonusTotal = bonusPerUnit * Number(item.quantity || 0);
-              totalAmount += subtotal;
+              const conversionFactor = Number(product.presentation_factor || item.conversion_factor || 1);
+              const stockQuantity = Number(item.quantity || 0) * conversionFactor;
+              const presentationName = product.presentation_name || item.presentation_name || product.presentation || 'Unidad';
+              const unitPrice = item.unit_price || product.presentation_unit_price || product.unit_price;
+              const costPrice =
+                product.presentation_cost_price !== null && product.presentation_cost_price !== undefined
+                  ? Number(product.presentation_cost_price)
+                  : product.cost_price !== null && product.cost_price !== undefined
+                    ? Number(product.cost_price) * conversionFactor
+                    : null;
 
-              saleItems.push({
-                product_id: item.product_id,
-                quantity: item.quantity,
-                unit_price: unitPrice,
-                cost_price: product.cost_price !== null && product.cost_price !== undefined ? Number(product.cost_price) : null,
-                discount: itemDiscount,
-                subtotal,
-                sales_bonus_per_unit: bonusPerUnit,
-                sales_bonus_total: bonusTotal,
-              });
+              if (product.stock < stockQuantity) {
+                errors.push(`Insufficient stock for ${product.name}`);
+              } else {
+                const itemDiscount = item.discount || 0;
+                const subtotal = (unitPrice * item.quantity) - itemDiscount;
+                const bonusPerUnit = product.has_sales_bonus ? Number(product.sales_bonus_per_unit || 0) * conversionFactor : 0;
+                const bonusTotal = bonusPerUnit * Number(item.quantity || 0);
+                totalAmount += subtotal;
+
+                saleItems.push({
+                  product_id: item.product_id,
+                  presentation_id: product.presentation_id || item.presentation_id || null,
+                  presentation_name: presentationName,
+                  conversion_factor: conversionFactor,
+                  stock_quantity: stockQuantity,
+                  quantity: item.quantity,
+                  unit_price: unitPrice,
+                  cost_price: costPrice,
+                  discount: itemDiscount,
+                  subtotal,
+                  sales_bonus_per_unit: bonusPerUnit,
+                  sales_bonus_total: bonusTotal,
+                });
+              }
             }
 
             if (processed === items.length) {
@@ -404,9 +455,9 @@ router.post('/', authenticateToken, [
 
           saleItems.forEach((item) => {
             db.run(
-              `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, cost_price, discount, subtotal, sales_bonus_per_unit, sales_bonus_total)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [saleId, item.product_id, item.quantity, item.unit_price, item.cost_price, item.discount, item.subtotal, item.sales_bonus_per_unit, item.sales_bonus_total],
+              `INSERT INTO sale_items (sale_id, product_id, quantity, presentation_id, presentation_name, conversion_factor, stock_quantity, unit_price, cost_price, discount, subtotal, sales_bonus_per_unit, sales_bonus_total)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [saleId, item.product_id, item.quantity, item.presentation_id, item.presentation_name, item.conversion_factor, item.stock_quantity, item.unit_price, item.cost_price, item.discount, item.subtotal, item.sales_bonus_per_unit, item.sales_bonus_total],
               (err) => {
                 if (err) {
                   errors.push(`Error inserting item for product ${item.product_id}`);
@@ -415,7 +466,7 @@ router.post('/', authenticateToken, [
                 // Update inventory
                 db.run(
                   'UPDATE inventory SET quantity = quantity - ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-                  [item.quantity, item.product_id],
+                  [item.stock_quantity, item.product_id],
                   () => {}
                 );
 
@@ -423,7 +474,7 @@ router.post('/', authenticateToken, [
                 db.run(
                   `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id)
                    VALUES (?, 'exit', ?, ?, ?)`,
-                  [item.product_id, item.quantity, saleNumber, req.user!.id],
+                  [item.product_id, item.stock_quantity, saleNumber, req.user!.id],
                   () => {}
                 );
 

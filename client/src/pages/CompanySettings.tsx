@@ -18,6 +18,7 @@ type FormData = {
   receipt_width_mm: number;
   show_logo: boolean;
   show_qr: boolean;
+  non_admin_history_days: number;
   cash_reopen_password: string;
   return_password: string;
 };
@@ -36,6 +37,7 @@ const emptyForm: FormData = {
   receipt_width_mm: 80,
   show_logo: true,
   show_qr: true,
+  non_admin_history_days: 5,
   cash_reopen_password: '',
   return_password: '',
 };
@@ -61,6 +63,7 @@ export default function CompanySettingsPage() {
       receipt_width_mm: settings.receipt_width_mm || 80,
       show_logo: settings.show_logo === 1,
       show_qr: settings.show_qr === 1,
+      non_admin_history_days: settings.non_admin_history_days || 5,
       cash_reopen_password: '',
       return_password: '',
     });
@@ -236,6 +239,22 @@ export default function CompanySettingsPage() {
         </div>
 
         <h2 style={{ marginTop: '1.5rem', marginBottom: '1rem', fontSize: '1.1rem' }}>Seguridad operativa</h2>
+        <div className="form-row">
+          <div className="form-group">
+            <label>Días permitidos para perfiles no administradores</label>
+            <input
+              type="number"
+              min={1}
+              max={365}
+              value={formData.non_admin_history_days}
+              onChange={(e) => setFormData({
+                ...formData,
+                non_admin_history_days: Math.min(365, Math.max(1, Number(e.target.value) || 1)),
+              })}
+            />
+            <small>Aplica a caja, movimientos, devoluciones, reportes y exportaciones. El administrador ve todo.</small>
+          </div>
+        </div>
         <div className="form-row">
           <div className="form-group">
             <label>Contraseña para reaperturar caja pasada</label>

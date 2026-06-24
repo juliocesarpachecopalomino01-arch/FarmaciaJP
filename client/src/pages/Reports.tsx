@@ -1,32 +1,86 @@
-﻿import { useState } from 'react';
+﻿import { useMemo, useState } from 'react';
 import { useQuery } from 'react-query';
 import { buildApiUrl } from '../api/client';
 import { reportsApi } from '../api/reports';
+import { companySettingsApi } from '../api/companySettings';
 import { format } from 'date-fns';
 import { BarChart3, TrendingUp, Package, Users, Download, CircleDollarSign } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { useAuth } from '../hooks/useAuth';
 import './Reports.css';
 
 const REPORT_COLORS = ['#155eef', '#00a7a5', '#16a34a', '#f59e0b', '#e11d48', '#7c3aed', '#0284c7', '#db2777', '#0891b2', '#65a30d'];
 
+function getPeruDateString() {
+  const now = new Date();
+  const peruDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Lima' }));
+  return format(peruDate, 'yyyy-MM-dd');
+}
+
+function getPeruDateStringOffset(daysOffset: number) {
+  const [year, month, day] = getPeruDateString().split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + daysOffset);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
 export default function Reports() {
-  // Get current date in Peru timezone
-  const getPeruDate = () => {
-    const now = new Date();
-    return new Date(now.toLocaleString('en-US', { timeZone: 'America/Lima' }));
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const { data: companySettings } = useQuery('company-settings', companySettingsApi.get);
+  const historyDays = Math.max(1, Number(companySettings?.non_admin_history_days || 5));
+  const minVisibleDate = getPeruDateStringOffset(-historyDays);
+  const maxVisibleDate = getPeruDateString();
+
+  const [dateRange, setDateRange] = useState(() => ({
+    start_date: maxVisibleDate,
+    end_date: maxVisibleDate,
+  }));
+
+  const clampDate = (date?: string) => {
+    if (!date || isAdmin) return date || '';
+    if (date < minVisibleDate) return minVisibleDate;
+    if (date > maxVisibleDate) return maxVisibleDate;
+    return date;
   };
 
-  const [dateRange, setDateRange] = useState({
-    start_date: format(getPeruDate(), 'yyyy-MM-dd'),
-    end_date: format(getPeruDate(), 'yyyy-MM-dd'),
+  const effectiveDateRange = useMemo(() => {
+    if (isAdmin) return dateRange;
+    return {
+      start_date: clampDate(dateRange.start_date),
+      end_date: clampDate(dateRange.end_date),
+    };
+  }, [dateRange, isAdmin, minVisibleDate, maxVisibleDate]);
+
+  const updateStartDate = (value: string) => {
+    const nextStart = clampDate(value);
+    setDateRange((current) => ({
+      ...current,
+      start_date: nextStart,
+      end_date: current.end_date && current.end_date < nextStart ? nextStart : clampDate(current.end_date),
+    }));
+  };
+
+  const updateEndDate = (value: string) => {
+    const nextEnd = clampDate(value);
+    setDateRange((current) => ({
+      ...current,
+      start_date: current.start_date && current.start_date > nextEnd ? nextEnd : clampDate(current.start_date),
+      end_date: nextEnd,
+    }));
+  };
+
+  const reportQueryString = new URLSearchParams({
+    start_date: effectiveDateRange.start_date,
+    end_date: effectiveDateRange.end_date,
   });
 
-  const { data: salesReport } = useQuery(['sales-report', dateRange], () =>
-    reportsApi.getSalesReport(dateRange)
+  const { data: salesReport } = useQuery(['sales-report', effectiveDateRange], () =>
+    reportsApi.getSalesReport(effectiveDateRange)
   );
 
-  const { data: topProducts } = useQuery(['top-products', dateRange], () =>
-    reportsApi.getTopProducts({ ...dateRange, limit: 10 })
+  const { data: topProducts } = useQuery(['top-products', effectiveDateRange], () =>
+    reportsApi.getTopProducts({ ...effectiveDateRange, limit: 10 })
   );
 
   const { data: inventoryReport } = useQuery('inventory-report', () =>
@@ -37,12 +91,12 @@ export default function Reports() {
     reportsApi.getCustomerReport(20)
   );
 
-  const { data: productsSoldByUser } = useQuery(['products-sold-by-user', dateRange], () =>
-    reportsApi.getProductsSoldByUser(dateRange)
+  const { data: productsSoldByUser } = useQuery(['products-sold-by-user', effectiveDateRange], () =>
+    reportsApi.getProductsSoldByUser(effectiveDateRange)
   );
 
-  const { data: profitReport } = useQuery(['profit-report', dateRange], () =>
-    reportsApi.getProfitReport(dateRange)
+  const { data: profitReport } = useQuery(['profit-report', effectiveDateRange], () =>
+    reportsApi.getProfitReport(effectiveDateRange)
   );
 
   const formatAccountingDate = (value?: string) => {
@@ -65,14 +119,18 @@ export default function Reports() {
           <label>Rango de Fecha Contable:</label>
           <input
             type="date"
-            value={dateRange.start_date}
-            onChange={(e) => setDateRange({ ...dateRange, start_date: e.target.value })}
+            value={effectiveDateRange.start_date}
+            min={isAdmin ? undefined : minVisibleDate}
+            max={isAdmin ? undefined : maxVisibleDate}
+            onChange={(e) => updateStartDate(e.target.value)}
           />
           <span>a</span>
           <input
             type="date"
-            value={dateRange.end_date}
-            onChange={(e) => setDateRange({ ...dateRange, end_date: e.target.value })}
+            value={effectiveDateRange.end_date}
+            min={isAdmin ? undefined : minVisibleDate}
+            max={isAdmin ? undefined : maxVisibleDate}
+            onChange={(e) => updateEndDate(e.target.value)}
           />
           </div>
           <div className="export-buttons">
@@ -86,7 +144,7 @@ export default function Reports() {
                     return;
                   }
 
-                  const url = buildApiUrl(`/export/sales/excel?start_date=${dateRange.start_date}&end_date=${dateRange.end_date}`);
+                  const url = buildApiUrl(`/export/sales/excel?${reportQueryString.toString()}`);
                   const response = await fetch(url, {
                     headers: {
                       'Authorization': `Bearer ${token}`,
@@ -412,7 +470,7 @@ export default function Reports() {
                     alert('No hay token de autenticación. Por favor, inicie sesión.');
                     return;
                   }
-                  const response = await fetch(buildApiUrl(`/export/products-sold-by-user/excel?start_date=${dateRange.start_date}&end_date=${dateRange.end_date}`), {
+                  const response = await fetch(buildApiUrl(`/export/products-sold-by-user/excel?${reportQueryString.toString()}`), {
                     headers: { Authorization: `Bearer ${token}` },
                   });
                   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Outlet, Link, useLocation } from 'react-router-dom';
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import GlobalSearch from './GlobalSearch';
 import {
@@ -54,6 +54,7 @@ const allMenuItems = [
 export default function Layout() {
   const { user, logout } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const [showSearch, setShowSearch] = useState(false);
 
   useEffect(() => {
@@ -85,6 +86,11 @@ export default function Layout() {
       items: menuItems.filter((item) => item.section === section),
     }))
     .filter((group) => group.items.length > 0);
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <div className="layout">
@@ -125,14 +131,16 @@ export default function Layout() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="user-info">
-            <div className="user-avatar">{user?.full_name.charAt(0).toUpperCase()}</div>
-            <div className="user-details">
-              <div className="user-name">{user?.full_name}</div>
-              <div className="user-role">{user?.role}</div>
+          {user && (
+            <div className="user-info">
+              <div className="user-avatar">{user.full_name.charAt(0).toUpperCase()}</div>
+              <div className="user-details">
+                <div className="user-name">{user.full_name}</div>
+                <div className="user-role">{user.role}</div>
+              </div>
             </div>
-          </div>
-          <button onClick={logout} className="logout-btn">
+          )}
+          <button onClick={handleLogout} className="logout-btn" type="button">
             <LogOut size={18} />
             Salir
           </button>

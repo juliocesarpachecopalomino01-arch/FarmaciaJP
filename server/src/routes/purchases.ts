@@ -241,6 +241,10 @@ router.post('/', authenticateToken, [
             purchaseItems.push({
               product_id: item.product_id,
               quantity: item.quantity,
+              presentation_id: null,
+              presentation_name: 'Unidad',
+              conversion_factor: 1,
+              stock_quantity: item.quantity,
               unit_price: item.unit_price || item.cost_price,
               cost_price: item.cost_price,
               subtotal,
@@ -281,9 +285,9 @@ router.post('/', authenticateToken, [
 
           purchaseItems.forEach((item) => {
             db.run(
-              `INSERT INTO purchase_items (purchase_id, product_id, quantity, unit_price, cost_price, subtotal)
-               VALUES (?, ?, ?, ?, ?, ?)`,
-              [purchaseId, item.product_id, item.quantity, item.unit_price, item.cost_price, item.subtotal],
+              `INSERT INTO purchase_items (purchase_id, product_id, quantity, presentation_id, presentation_name, conversion_factor, stock_quantity, unit_price, cost_price, subtotal)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [purchaseId, item.product_id, item.quantity, item.presentation_id, item.presentation_name, item.conversion_factor, item.stock_quantity, item.unit_price, item.cost_price, item.subtotal],
               (err) => {
                 if (err) {
                   errors.push(`Error inserting item for product ${item.product_id}`);
@@ -292,7 +296,7 @@ router.post('/', authenticateToken, [
                 // Update inventory
                 db.run(
                   'UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-                  [item.quantity, item.product_id],
+                  [item.stock_quantity, item.product_id],
                   () => {}
                 );
 
@@ -309,7 +313,7 @@ router.post('/', authenticateToken, [
                 db.run(
                   `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, notes)
                    VALUES (?, 'entry', ?, ?, ?, ?)`,
-                  [item.product_id, item.quantity, purchaseNumber, req.user!.id, 'Compra a proveedor'],
+                  [item.product_id, item.stock_quantity, purchaseNumber, req.user!.id, 'Compra a proveedor'],
                   () => {}
                 );
 
@@ -415,6 +419,10 @@ router.put('/:id', authenticateToken, [
           purchaseItems.push({
             product_id: item.product_id,
             quantity: item.quantity,
+            presentation_id: null,
+            presentation_name: 'Unidad',
+            conversion_factor: 1,
+            stock_quantity: item.quantity,
             unit_price: item.unit_price || item.cost_price,
             cost_price: item.cost_price,
             subtotal,
@@ -434,7 +442,7 @@ router.put('/:id', authenticateToken, [
               if (!oldItems || oldItems.length === 0) return callback();
               const byProduct: Record<number, number> = {};
               oldItems.forEach((oi) => {
-                byProduct[oi.product_id] = (byProduct[oi.product_id] || 0) + oi.quantity;
+                byProduct[oi.product_id] = (byProduct[oi.product_id] || 0) + (oi.stock_quantity || oi.quantity);
               });
               const productIds = Object.keys(byProduct).map(Number);
               let done = 0;
@@ -470,13 +478,14 @@ router.put('/:id', authenticateToken, [
                     let ins = 0;
                     purchaseItems.forEach((pi) => {
                       db.run(
-                        'INSERT INTO purchase_items (purchase_id, product_id, quantity, unit_price, cost_price, subtotal) VALUES (?, ?, ?, ?, ?, ?)',
-                        [purchaseId, pi.product_id, pi.quantity, pi.unit_price, pi.cost_price, pi.subtotal],
+                        `INSERT INTO purchase_items (purchase_id, product_id, quantity, presentation_id, presentation_name, conversion_factor, stock_quantity, unit_price, cost_price, subtotal)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [purchaseId, pi.product_id, pi.quantity, pi.presentation_id, pi.presentation_name, pi.conversion_factor, pi.stock_quantity, pi.unit_price, pi.cost_price, pi.subtotal],
                         () => {
-                          db.run('UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?', [pi.quantity, pi.product_id], () => {
+                          db.run('UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?', [pi.stock_quantity, pi.product_id], () => {
                             db.run(
                               'INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)',
-                              [pi.product_id, 'entry', pi.quantity, purchase.purchase_number, req.user!.id, 'Compra a proveedor'],
+                              [pi.product_id, 'entry', pi.stock_quantity, purchase.purchase_number, req.user!.id, 'Compra a proveedor'],
                               () => {
                                 if (pi.cost_price) {
                                   db.run('UPDATE products SET cost_price = ? WHERE id = ?', [pi.cost_price, pi.product_id], () => {});
@@ -549,7 +558,7 @@ router.delete('/:id', authenticateToken, [
       const oldItems = items || [];
       const byProduct: Record<number, number> = {};
       oldItems.forEach((oi: any) => {
-        byProduct[oi.product_id] = (byProduct[oi.product_id] || 0) + oi.quantity;
+        byProduct[oi.product_id] = (byProduct[oi.product_id] || 0) + (oi.stock_quantity || oi.quantity);
       });
       const productIds = Object.keys(byProduct).map(Number);
       let done = 0;

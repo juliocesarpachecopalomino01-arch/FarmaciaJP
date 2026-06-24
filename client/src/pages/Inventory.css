@@ -122,6 +122,55 @@
   font-size: 0.95rem;
 }
 
+.inventory-combobox {
+  position: relative;
+  width: 100%;
+}
+
+.inventory-combobox input {
+  width: 100%;
+}
+
+.inventory-combobox-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  max-height: 18rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+}
+
+.inventory-combobox-menu button {
+  width: 100%;
+  display: block;
+  padding: 0.55rem 0.75rem;
+  border: 0;
+  border-bottom: 1px solid var(--border-light);
+  background: transparent;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.inventory-combobox-menu button:hover,
+.inventory-combobox-menu button.active {
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.12), rgba(16, 185, 129, 0.1));
+}
+
+.inventory-combobox-empty {
+  padding: 0.75rem;
+  color: var(--text-light);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
 .inventory-search-field {
   position: relative;
   display: block !important;

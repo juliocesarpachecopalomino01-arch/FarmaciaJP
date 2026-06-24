@@ -101,6 +101,13 @@ function getItems(saleId: string): Promise<any[]> {
   });
 }
 
+function saleItemDisplayName(item: any): string {
+  const productName = String(item.product_name || '-');
+  const presentationName = String(item.presentation_name || '').trim();
+  if (!presentationName || presentationName.toLowerCase() === 'unidad') return productName;
+  return `${productName} (${presentationName})`;
+}
+
 function getInventoryMovement(movementId: string): Promise<any> {
   return new Promise((resolve, reject) => {
     db.get(
@@ -131,14 +138,18 @@ router.get('/inventory-adjustments/:movementId/pdf', authenticateToken, async (r
     if (!movement) {
       return res.status(404).json({ error: 'Movement not found' });
     }
-    if (movement.movement_type !== 'adjustment') {
+    const isPositiveAdjustment = movement.movement_type === 'adjustment_positive';
+    const isNegativeAdjustment = movement.movement_type === 'adjustment_negative' || movement.movement_type === 'adjustment';
+    if (!isPositiveAdjustment && !isNegativeAdjustment) {
       return res.status(400).json({ error: 'Only adjustment movements have this voucher' });
     }
 
     const { width, margin, topMargin, bottomMargin, bottomPadding, contentRight } = getThermalLayout(settings);
     const quantity = Number(movement.quantity) || 0;
     const currentStock = Number(movement.current_stock) || 0;
-    const previousStock = currentStock + quantity;
+    const previousStock = isPositiveAdjustment ? currentStock - quantity : currentStock + quantity;
+    const receiptTitle = isPositiveAdjustment ? 'AJUSTE POSITIVO DE INVENTARIO' : 'AJUSTE NEGATIVO DE INVENTARIO';
+    const quantityLabel = isPositiveAdjustment ? 'Cantidad ingresada' : 'Cantidad descontada';
     const hasLogo = Boolean(settings.logo_data_url && settings.show_logo);
     const notesLines = movement.notes ? Math.ceil(String(movement.notes).length / 28) : 0;
     const estimatedHeight =
@@ -181,7 +192,7 @@ router.get('/inventory-adjustments/:movementId/pdf', authenticateToken, async (r
     if (settings.phone) doc.text(`Tel: ${settings.phone}`, { align: 'center' });
     line(doc, margin, contentRight);
 
-    doc.font('Helvetica-Bold').fontSize(8).text('COMPROBANTE DE AJUSTE DE INVENTARIO', { align: 'center' });
+    doc.font('Helvetica-Bold').fontSize(8).text(receiptTitle, { align: 'center' });
     doc.moveDown(0.2);
     doc.font('Helvetica').fontSize(7);
     doc.text(`Comprobante: ${movement.reference_number || `AJU-${movement.id}`}`);
@@ -193,9 +204,9 @@ router.get('/inventory-adjustments/:movementId/pdf', authenticateToken, async (r
     doc.font('Helvetica').fontSize(7).text(movement.product_name || '-');
     if (movement.barcode) doc.text(`Codigo: ${movement.barcode}`);
     doc.moveDown(0.2);
-    doc.font('Helvetica-Bold').text('AJUSTE POR FALTANTE');
+    doc.font('Helvetica-Bold').text(receiptTitle);
     doc.font('Helvetica').text(`Stock sistema anterior: ${previousStock}`);
-    doc.text(`Cantidad descontada: ${quantity}`);
+    doc.text(`${quantityLabel}: ${quantity}`);
     doc.text(`Stock final: ${currentStock}`);
     if (movement.notes) {
       doc.moveDown(0.2);
@@ -207,9 +218,10 @@ router.get('/inventory-adjustments/:movementId/pdf', authenticateToken, async (r
     if (settings.show_qr) {
       const qrPayload = JSON.stringify({
         tipo: 'ajuste_inventario',
+        movimiento: isPositiveAdjustment ? 'positivo' : 'negativo',
         comprobante: movement.reference_number || `AJU-${movement.id}`,
         producto: movement.product_name,
-        cantidad_descontada: quantity,
+        cantidad: quantity,
         stock_final: currentStock,
         fecha: movement.created_at,
       });
@@ -387,7 +399,7 @@ router.get('/:saleId/pdf', authenticateToken, async (req: AuthRequest, res) => {
     ].filter(Boolean).length;
     const saleLineCount = 3 + (sale.customer_name ? 1 : 0);
     const itemLineCount = items.reduce((sum, item) => {
-      const nameLines = Math.max(1, Math.ceil(String(item.product_name || '').length / charsPerLine));
+      const nameLines = Math.max(1, Math.ceil(saleItemDisplayName(item).length / charsPerLine));
       return sum + nameLines + (item.discount > 0 ? 1 : 0);
     }, 0);
     const totalsLineCount = 2 + (sale.discount > 0 ? 1 : 0) + (sale.tax_amount > 0 ? 1 : 0);
@@ -473,11 +485,12 @@ router.get('/:saleId/pdf', authenticateToken, async (req: AuthRequest, res) => {
       const rowY = doc.y;
       doc.font('Helvetica').fontSize(7);
       doc.text(String(item.quantity), qtyX, rowY, { width: qtyW });
-      doc.text(item.product_name, descX, rowY, { width: descWidth });
+      const displayName = saleItemDisplayName(item);
+      doc.text(displayName, descX, rowY, { width: descWidth });
       doc.text(amount(item.unit_price), unitX, rowY, { width: unitW, align: 'right' });
       doc.font('Helvetica-Bold').text(amount(item.subtotal), amountX, rowY, { width: amountW, align: 'right' });
 
-      const nameHeight = doc.heightOfString(item.product_name, { width: descWidth });
+      const nameHeight = doc.heightOfString(displayName, { width: descWidth });
       doc.y = Math.max(rowY + nameHeight, rowY + 9);
 
       if (item.discount > 0) {

@@ -21,6 +21,28 @@ export interface Product {
   stock?: number;
   min_stock?: number;
   max_stock?: number;
+  presentations?: ProductPresentation[];
+}
+
+export interface PresentationType {
+  id: number;
+  name: string;
+  description?: string;
+  is_active?: number;
+}
+
+export interface ProductPresentation {
+  id: number;
+  product_id: number;
+  presentation_type_id?: number;
+  type_name?: string;
+  name: string;
+  barcode?: string;
+  conversion_factor: number;
+  unit_price: number;
+  cost_price?: number;
+  is_default?: number;
+  is_active?: number;
 }
 
 export interface ProductFilters {
@@ -114,6 +136,38 @@ export const productsApi = {
 
   getQRImage: async (id: number): Promise<{ qrImage: string; barcode: string; qrUrl?: string }> => {
     const response = await api.get<{ qrImage: string; barcode: string; qrUrl?: string }>(`/products/${id}/qr-image`);
+    return response.data;
+  },
+};
+
+export const productPresentationsApi = {
+  getTypes: async (): Promise<PresentationType[]> => {
+    const response = await api.get<PresentationType[]>('/product-presentations/types');
+    return response.data;
+  },
+
+  createType: async (data: Partial<PresentationType>): Promise<{ id: number; message: string }> => {
+    const response = await api.post('/product-presentations/types', data);
+    return response.data;
+  },
+
+  updateType: async (id: number, data: Partial<PresentationType>): Promise<{ message: string }> => {
+    const response = await api.put(`/product-presentations/types/${id}`, data);
+    return response.data;
+  },
+
+  getByProduct: async (productId: number): Promise<ProductPresentation[]> => {
+    const response = await api.get<ProductPresentation[]>(`/product-presentations/product/${productId}`);
+    return response.data;
+  },
+
+  create: async (productId: number, data: Partial<ProductPresentation>): Promise<{ id: number; message: string }> => {
+    const response = await api.post(`/product-presentations/product/${productId}`, data);
+    return response.data;
+  },
+
+  update: async (id: number, data: Partial<ProductPresentation>): Promise<{ message: string }> => {
+    const response = await api.put(`/product-presentations/${id}`, data);
     return response.data;
   },
 };

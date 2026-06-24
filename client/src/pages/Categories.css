@@ -4,6 +4,14 @@
   gap: 1.5rem;
 }
 
+.categories-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .category-card {
   background: var(--surface);
   border-radius: 0.5rem;
@@ -49,4 +57,40 @@
   font-size: 0.85rem;
   color: var(--text-light);
   font-weight: 500;
+}
+
+.categories-import-modal {
+  max-width: 520px;
+}
+
+.import-help {
+  color: var(--text-light);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  margin: 0.5rem 0 1rem;
+}
+
+.template-button {
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.selected-file {
+  display: block;
+  margin-top: 0.4rem;
+  color: var(--text-light);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+@media (max-width: 700px) {
+  .categories-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .categories-actions button {
+    flex: 1;
+  }
 }

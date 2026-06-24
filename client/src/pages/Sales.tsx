@@ -10,11 +10,38 @@ import { printReceipt } from '../utils/printReceipt';
 import { X, ShoppingCart } from 'lucide-react';
 import './Sales.css';
 
+type SaleCartItem = {
+  product_id: number;
+  product_name: string;
+  name: string;
+  laboratory?: string;
+  barcode?: string;
+  quantity: number;
+  presentation_id?: number;
+  presentation_name: string;
+  conversion_factor: number;
+  unit_price: number;
+  discount: number;
+  stock: number;
+};
+
+type SaleProductOption = {
+  key: string;
+  product: Product;
+  presentation_id?: number;
+  presentation_name: string;
+  conversion_factor: number;
+  unit_price: number;
+  cost_price?: number;
+  barcode?: string;
+  label: string;
+};
+
 export default function Sales() {
   const [productSearch, setProductSearch] = useState('');
   const [isProductSearchOpen, setIsProductSearchOpen] = useState(false);
   const productSearchRef = useRef<HTMLInputElement | null>(null);
-  const [cart, setCart] = useState<Array<{ product_id: number; name: string; laboratory?: string; quantity: number; unit_price: number; discount: number }>>([]);
+  const [cart, setCart] = useState<SaleCartItem[]>([]);
   const [saleForm, setSaleForm] = useState({
     customer_id: '',
     payment_method: 'cash',
@@ -83,44 +110,68 @@ export default function Sales() {
     });
   };
 
-  const addToCart = (productId: number) => {
-    const product = productsData?.products.find((p) => p.id === productId);
-    if (!product || (product.stock || 0) <= 0) {
+  const getCartKey = (item: { product_id: number; presentation_id?: number; presentation_name?: string }) =>
+    `${item.product_id}-${item.presentation_id || item.presentation_name || 'unidad'}`;
+
+  const addToCart = (option: SaleProductOption) => {
+    const product = option.product;
+    const stock = product.stock || 0;
+    if (!product || stock <= 0) {
       alert('Producto sin stock disponible');
       return;
     }
 
-    const existingItem = cart.find((item) => item.product_id === productId);
+    const key = getCartKey({
+      product_id: product.id,
+      presentation_id: option.presentation_id,
+      presentation_name: option.presentation_name,
+    });
+    const existingItem = cart.find((item) => getCartKey(item) === key);
     if (existingItem) {
-      if (existingItem.quantity >= (product.stock || 0)) {
+      if ((existingItem.quantity + 1) * existingItem.conversion_factor > stock) {
         alert('No hay suficiente stock disponible');
         return;
       }
       setCart(cart.map((item) =>
-        item.product_id === productId
+        getCartKey(item) === key
           ? { ...item, quantity: item.quantity + 1 }
           : item
       ));
     } else {
+      if (option.conversion_factor > stock) {
+        alert('No hay suficiente stock disponible para esta presentación');
+        return;
+      }
       setCart([...cart, {
-        product_id: productId,
+        product_id: product.id,
+        product_name: product.name,
         name: product.name,
         laboratory: product.laboratory || undefined,
+        barcode: option.barcode || product.barcode,
         quantity: 1,
-        unit_price: product.unit_price,
+        presentation_id: option.presentation_id,
+        presentation_name: option.presentation_name,
+        conversion_factor: option.conversion_factor,
+        unit_price: option.unit_price,
         discount: 0,
+        stock,
       }]);
     }
   };
 
-  const removeFromCart = (productId: number) => {
-    setCart(cart.filter((item) => item.product_id !== productId));
+  const removeFromCart = (key: string) => {
+    setCart(cart.filter((item) => getCartKey(item) !== key));
   };
 
-  const updateCartItem = (productId: number, field: 'quantity' | 'discount', value: number) => {
-    setCart(cart.map((item) =>
-      item.product_id === productId ? { ...item, [field]: value } : item
-    ));
+  const updateCartItem = (key: string, field: 'quantity' | 'discount', value: number) => {
+    setCart(cart.map((item) => {
+      if (getCartKey(item) !== key) return item;
+      if (field === 'quantity' && value * item.conversion_factor > item.stock) {
+        alert('No hay suficiente stock disponible');
+        return item;
+      }
+      return { ...item, [field]: value };
+    }));
   };
 
   const calculateSubtotal = () => {
@@ -176,6 +227,9 @@ export default function Sales() {
       items: cart.map((item) => ({
         product_id: item.product_id,
         quantity: item.quantity,
+        presentation_id: item.presentation_id,
+        presentation_name: item.presentation_name,
+        conversion_factor: item.conversion_factor,
         unit_price: item.unit_price,
         discount: item.discount,
       })),
@@ -207,42 +261,74 @@ export default function Sales() {
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
       .trim();
-  const productMatchesSearch = (product: Product) => {
+  const buildSaleOptions = (product: Product): SaleProductOption[] => {
+    const activePresentations = (product.presentations || [])
+      .filter((presentation) => presentation.is_active === undefined || presentation.is_active === 1);
+    const baseOptions = activePresentations.length > 0
+      ? activePresentations
+      : [{
+          id: undefined,
+          name: product.presentation || 'Unidad',
+          barcode: product.barcode,
+          conversion_factor: 1,
+          unit_price: product.unit_price,
+          cost_price: product.cost_price,
+          is_default: 1,
+        }];
+
+    return baseOptions.map((presentation: any) => ({
+      key: `${product.id}-${presentation.id || presentation.name}`,
+      product,
+      presentation_id: presentation.id,
+      presentation_name: presentation.name || presentation.type_name || 'Unidad',
+      conversion_factor: Number(presentation.conversion_factor || 1),
+      unit_price: Number(presentation.unit_price || product.unit_price),
+      cost_price: presentation.cost_price,
+      barcode: presentation.barcode || product.barcode,
+      label: getProductDisplayName(product),
+    }));
+  };
+
+  const productOptionMatchesSearch = (option: SaleProductOption) => {
     if (!normalizedProductSearch) return true;
     const terms = normalizeSearchText(normalizedProductSearch).split(/\s+/).filter(Boolean);
+    const product = option.product;
     const searchableText = normalizeSearchText([
       product.name,
-      product.barcode,
+      option.barcode,
       product.category_name,
       product.laboratory,
       product.presentation,
+      option.presentation_name,
       product.sanitary_registration,
       product.lot_number,
       product.unit_price?.toFixed(2),
     ].join(' '));
     return terms.every((term) => searchableText.includes(term));
   };
-  const getProductSearchScore = (product: Product) => {
+  const getProductSearchScore = (option: SaleProductOption) => {
     if (!normalizedProductSearch) return 0;
     const search = normalizeSearchText(normalizedProductSearch);
+    const product = option.product;
     const name = normalizeSearchText(product.name);
-    const barcode = normalizeSearchText(product.barcode);
+    const barcode = normalizeSearchText(option.barcode);
     const displayName = normalizeSearchText(getProductDisplayName(product));
+    const presentation = normalizeSearchText(option.presentation_name);
 
     if (name === search || barcode === search) return 0;
-    if (name.startsWith(search) || barcode.startsWith(search)) return 1;
-    if (displayName.includes(search)) return 2;
+    if (name.startsWith(search) || barcode.startsWith(search) || presentation.startsWith(search)) return 1;
+    if (displayName.includes(search) || presentation.includes(search)) return 2;
     return 3;
   };
-  const filteredProducts = availableProducts
-    .filter(productMatchesSearch)
-    .sort((a, b) => getProductSearchScore(a) - getProductSearchScore(b) || a.name.localeCompare(b.name));
+  const filteredProductOptions = availableProducts
+    .flatMap(buildSaleOptions)
+    .filter(productOptionMatchesSearch)
+    .sort((a, b) => getProductSearchScore(a) - getProductSearchScore(b) || a.product.name.localeCompare(b.product.name));
 
-  const selectProduct = (productId: number) => {
-    addToCart(productId);
+  const selectProduct = (option: SaleProductOption) => {
+    addToCart(option);
     setProductSearch('');
     setIsProductSearchOpen(false);
-    window.requestAnimationFrame(() => productSearchRef.current?.focus());
   };
 
   return (
@@ -274,9 +360,9 @@ export default function Sales() {
                   setIsProductSearchOpen(Boolean(e.target.value.trim()));
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && filteredProducts[0]) {
+                  if (e.key === 'Enter' && filteredProductOptions[0]) {
                     e.preventDefault();
-                    selectProduct(filteredProducts[0].id);
+                    selectProduct(filteredProductOptions[0]);
                   }
                 }}
                 placeholder="Escribe nombre, código o categoría..."
@@ -284,21 +370,25 @@ export default function Sales() {
               />
               {hasOpenCashRegister && isProductSearchOpen && (
                 <div className="product-suggestions">
-                  {filteredProducts.length > 0 ? (
-                    filteredProducts.map((product) => (
+                  {filteredProductOptions.length > 0 ? (
+                    filteredProductOptions.map((option) => (
                       <button
                         type="button"
-                        key={product.id}
+                        key={option.key}
                         className="product-suggestion"
                         onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => selectProduct(product.id)}
+                        onClick={() => selectProduct(option)}
                       >
                         <span>
-                          <strong>{getProductDisplayName(product)}</strong>
-                          {product.barcode && <small>{product.barcode}</small>}
+                          <strong>{option.label}</strong>
+                          <small>
+                            {option.presentation_name}
+                            {option.conversion_factor > 1 ? ` x ${option.conversion_factor} und.` : ''}
+                            {option.barcode ? ` · ${option.barcode}` : ''}
+                          </small>
                         </span>
                         <span className="product-suggestion-meta">
-                          Stock {product.stock || 0} · S/ {product.unit_price.toFixed(2)}
+                          Stock {Math.floor((option.product.stock || 0) / option.conversion_factor)} · S/ {option.unit_price.toFixed(2)}
                         </span>
                       </button>
                     ))
@@ -329,15 +419,22 @@ export default function Sales() {
                 <tbody>
                   {cart.map((item) => {
                     const subtotal = (item.unit_price * item.quantity) - item.discount;
+                    const itemKey = getCartKey(item);
                     return (
-                      <tr key={item.product_id}>
-                        <td>{getProductDisplayName(item)}</td>
+                      <tr key={itemKey}>
+                        <td>
+                          <strong>{getProductDisplayName(item)}</strong>
+                          <small className="cart-presentation">
+                            {item.presentation_name}
+                            {item.conversion_factor > 1 ? ` x ${item.conversion_factor} und.` : ''}
+                          </small>
+                        </td>
                         <td>
                           <input
                             type="number"
                             min="1"
                             value={item.quantity}
-                            onChange={(e) => updateCartItem(item.product_id, 'quantity', Number(e.target.value))}
+                            onChange={(e) => updateCartItem(itemKey, 'quantity', Number(e.target.value))}
                             style={{ width: '60px' }}
                           />
                         </td>
@@ -348,7 +445,7 @@ export default function Sales() {
                             min="0"
                             step="0.01"
                             value={item.discount}
-                            onChange={(e) => updateCartItem(item.product_id, 'discount', Number(e.target.value))}
+                            onChange={(e) => updateCartItem(itemKey, 'discount', Number(e.target.value))}
                             style={{ width: '80px' }}
                           />
                         </td>
@@ -356,7 +453,7 @@ export default function Sales() {
                         <td>
                           <button
                             type="button"
-                            onClick={() => removeFromCart(item.product_id)}
+                            onClick={() => removeFromCart(itemKey)}
                             className="btn-icon btn-danger"
                           >
                             <X size={16} />

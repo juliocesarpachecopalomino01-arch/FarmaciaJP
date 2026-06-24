@@ -3,6 +3,10 @@ import api from './client';
 export interface SaleItem {
   product_id: number;
   quantity: number;
+  presentation_id?: number;
+  presentation_name?: string;
+  conversion_factor?: number;
+  stock_quantity?: number;
   unit_price?: number;
   discount?: number;
 }
@@ -35,6 +39,10 @@ export interface SaleItemDetail {
   product_name: string;
   barcode?: string;
   quantity: number;
+  presentation_id?: number;
+  presentation_name?: string;
+  conversion_factor?: number;
+  stock_quantity?: number;
   unit_price: number;
   discount: number;
   subtotal: number;

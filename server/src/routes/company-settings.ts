@@ -20,6 +20,7 @@ const defaultSettings = {
   receipt_width_mm: 80,
   show_logo: 1,
   show_qr: 1,
+  non_admin_history_days: 5,
   has_cash_reopen_password: true,
   has_return_password: true,
 };
@@ -57,6 +58,7 @@ router.put('/', authenticateToken, requireRole('admin'), [
   body('receipt_width_mm').optional().isInt({ min: 58, max: 100 }),
   body('show_logo').optional().isBoolean(),
   body('show_qr').optional().isBoolean(),
+  body('non_admin_history_days').optional().isInt({ min: 1, max: 365 }),
   body('cash_reopen_password').optional({ nullable: true }).isString().isLength({ min: 4, max: 80 }),
   body('return_password').optional({ nullable: true }).isString().isLength({ min: 4, max: 80 }),
 ], (req: AuthRequest, res) => {
@@ -79,6 +81,7 @@ router.put('/', authenticateToken, requireRole('admin'), [
     'receipt_width_mm',
     'show_logo',
     'show_qr',
+    'non_admin_history_days',
     'cash_reopen_password',
     'return_password',
   ];
@@ -92,6 +95,8 @@ router.put('/', authenticateToken, requireRole('admin'), [
     updates.push(`${field} = ?`);
     if (field === 'show_logo' || field === 'show_qr') {
       params.push(req.body[field] ? 1 : 0);
+    } else if (field === 'non_admin_history_days') {
+      params.push(Math.min(365, Math.max(1, Math.floor(Number(req.body[field]) || 5))));
     } else if (field === 'cash_reopen_password' || field === 'return_password') {
       params.push(String(req.body[field]).trim());
     } else {

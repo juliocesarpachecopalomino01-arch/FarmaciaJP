@@ -30,6 +30,43 @@ function getPrimaryLocalIP(): string {
   return '192.168.0.103';
 }
 
+function attachPresentations(products: any[], callback: (items: any[]) => void) {
+  if (!products || products.length === 0) {
+    callback(products || []);
+    return;
+  }
+
+  const ids = products.map((product) => product.id).filter(Boolean);
+  const placeholders = ids.map(() => '?').join(',');
+
+  db.all(
+    `SELECT pp.*, pt.name as type_name
+     FROM product_presentations pp
+     LEFT JOIN presentation_types pt ON pp.presentation_type_id = pt.id
+     WHERE pp.product_id IN (${placeholders})
+     ORDER BY pp.is_default DESC, pp.name ASC`,
+    ids,
+    (err, presentations: any[]) => {
+      if (err) {
+        callback(products);
+        return;
+      }
+
+      const byProduct = new Map<number, any[]>();
+      (presentations || []).forEach((presentation) => {
+        const list = byProduct.get(presentation.product_id) || [];
+        list.push(presentation);
+        byProduct.set(presentation.product_id, list);
+      });
+
+      callback(products.map((product) => ({
+        ...product,
+        presentations: byProduct.get(product.id) || [],
+      })));
+    }
+  );
+}
+
 // Get all products with filters
 router.get('/', [
   query('search').optional(),
@@ -58,9 +95,19 @@ router.get('/', [
   }
 
   if (search) {
-    query += ' AND (p.name LIKE ? OR p.barcode LIKE ? OR p.description LIKE ? OR p.sanitary_registration LIKE ? OR p.lot_number LIKE ? OR p.presentation LIKE ? OR p.laboratory LIKE ?)';
+    query += ` AND (
+      p.name LIKE ? OR p.barcode LIKE ? OR p.description LIKE ?
+      OR p.sanitary_registration LIKE ? OR p.lot_number LIKE ?
+      OR p.presentation LIKE ? OR p.laboratory LIKE ?
+      OR EXISTS (
+        SELECT 1
+        FROM product_presentations pp
+        WHERE pp.product_id = p.id
+          AND (pp.name LIKE ? OR pp.barcode LIKE ?)
+      )
+    )`;
     const searchTerm = `%${search}%`;
-    params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+    params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
   }
 
   if (category_id) {
@@ -86,9 +133,19 @@ router.get('/', [
     }
 
     if (search) {
-      countQuery += ' AND (name LIKE ? OR barcode LIKE ? OR description LIKE ? OR sanitary_registration LIKE ? OR lot_number LIKE ? OR presentation LIKE ? OR laboratory LIKE ?)';
+      countQuery += ` AND (
+        name LIKE ? OR barcode LIKE ? OR description LIKE ?
+        OR sanitary_registration LIKE ? OR lot_number LIKE ?
+        OR presentation LIKE ? OR laboratory LIKE ?
+        OR EXISTS (
+          SELECT 1
+          FROM product_presentations pp
+          WHERE pp.product_id = products.id
+            AND (pp.name LIKE ? OR pp.barcode LIKE ?)
+        )
+      )`;
       const searchTerm = `%${search}%`;
-      countParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      countParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     if (category_id) {
@@ -101,14 +158,16 @@ router.get('/', [
         return res.status(500).json({ error: 'Database error' });
       }
 
-      res.json({
-        products,
-        pagination: {
-          page: Number(page),
-          limit: Number(limit),
-          total: result.total,
-          totalPages: Math.ceil(result.total / Number(limit)),
-        },
+      attachPresentations(products as any[], (items) => {
+        res.json({
+          products: items,
+          pagination: {
+            page: Number(page),
+            limit: Number(limit),
+            total: result.total,
+            totalPages: Math.ceil(result.total / Number(limit)),
+          },
+        });
       });
     });
   });
@@ -204,7 +263,7 @@ router.get('/:id', (req, res) => {
       if (!product) {
         return res.status(404).json({ error: 'Product not found' });
       }
-      res.json(product);
+      attachPresentations([product], (items) => res.json(items[0]));
     }
   );
 });
@@ -449,10 +508,24 @@ router.post('/', authenticateToken, [
           return res.status(500).json({ error: 'Database error', details: err.message });
         }
 
+        const productId = this.lastID;
+
         // Initialize inventory
         db.run(
           'INSERT INTO inventory (product_id, quantity) VALUES (?, 0)',
-          [this.lastID],
+          [productId],
+          () => {}
+        );
+
+        // Create the base sales presentation so every new product can be sold immediately.
+        db.run(
+          `INSERT INTO product_presentations
+           (product_id, presentation_type_id, name, barcode, conversion_factor, unit_price, cost_price, is_default, is_active)
+           SELECT ?, id, ?, ?, 1, ?, ?, 1, 1
+           FROM presentation_types
+           WHERE name = 'Unidad'
+           LIMIT 1`,
+          [productId, presentation || 'Unidad', finalBarcode, unit_price, cost_price || null],
           () => {}
         );
 
@@ -460,15 +533,15 @@ router.post('/', authenticateToken, [
         db.run(
           `INSERT INTO product_price_history (product_id, old_unit_price, new_unit_price, old_cost_price, new_cost_price, changed_by, notes, valid_from, valid_until)
            VALUES (?, NULL, ?, NULL, ?, ?, 'Precio inicial al crear producto', CURRENT_TIMESTAMP, NULL)`,
-          [this.lastID, unit_price, cost_price || null, req.user?.id || null],
+          [productId, unit_price, cost_price || null, req.user?.id || null],
           () => {} // Don't wait for this
         );
 
         // Log audit
-        logAction(req.user?.id || null, 'CREATE', 'product', this.lastID, null, req.body, req);
+        logAction(req.user?.id || null, 'CREATE', 'product', productId, null, req.body, req);
 
         res.status(201).json({ 
-          id: this.lastID, 
+          id: productId, 
           barcode: finalBarcode,
           message: 'Product created successfully' 
         });
@@ -723,7 +796,7 @@ router.post('/import', authenticateToken, [
     const data = XLSX.utils.sheet_to_json(worksheet);
 
     if (!data || data.length === 0) {
-      return res.status(400).json({ error: 'El archivo Excel estÃ¡ vacÃ­o o no tiene datos' });
+      return res.status(400).json({ error: 'El archivo Excel esta vacio o no tiene datos' });
     }
 
     const results = {
@@ -732,7 +805,7 @@ router.post('/import', authenticateToken, [
       skipped: 0,
     };
 
-    /** Convierte valor de Excel (string YYYY-MM-DD o nÃºmero serial) a YYYY-MM-DD o null */
+    /** Convierte valor de Excel (string YYYY-MM-DD o numero serial) a YYYY-MM-DD o null */
     const parseExcelDate = (val: any): string | null => {
       if (val == null || val === '') return null;
       if (typeof val === 'string') {
@@ -757,14 +830,14 @@ router.post('/import', authenticateToken, [
         const unit_price = parseFloat(row['Precio'] || row['Precio Unitario'] || row['unit_price'] || row['Unit Price'] || 0);
         
         if (!name || !unit_price || isNaN(unit_price)) {
-          results.errors.push(`Fila ${rowNum}: Falta nombre o precio unitario vÃ¡lido`);
+          results.errors.push(`Fila ${rowNum}: Falta nombre o precio unitario valido`);
           results.skipped++;
           resolve();
           return;
         }
 
-        const description = row['Descripción'] || row['DescripciÃ³n'] || row['Descripci\u00c3\u00b3n'] || row['description'] || row['Description'] || null;
-        let barcode = row['Código de Barras'] || row['Código'] || row['CÃ³digo de Barras'] || row['C\u00c3\u00b3digo de Barras'] || row['CÃ³digo'] || row['C\u00c3\u00b3digo'] || row['barcode'] || row['Barcode'] || null;
+        const description = row['Descripción'] || row['Descripcion'] || row['DescripciÃ³n'] || row['Descripci\u00c3\u00b3n'] || row['description'] || row['Description'] || null;
+        let barcode = row['Código de Barras'] || row['Codigo de Barras'] || row['Código'] || row['Codigo'] || row['CÃ³digo de Barras'] || row['C\u00c3\u00b3digo de Barras'] || row['CÃ³digo'] || row['C\u00c3\u00b3digo'] || row['barcode'] || row['Barcode'] || null;
         const sanitary_registration = row['Registro Sanitario'] || row['registro_sanitario'] || row['sanitary_registration'] || null;
         const lot_number = row['Lote'] || row['lote'] || row['lot_number'] || row['Lot'] || null;
         const presentation = row['Presentación'] || row['Presentacion'] || row['presentation'] || row['Presentation'] || null;
@@ -775,13 +848,13 @@ router.post('/import', authenticateToken, [
           const randomStr = crypto.randomBytes(4).toString('hex').toUpperCase();
           barcode = `PROD${timestamp}${randomStr}`;
         }
-        const category_name = row['Categoría'] || row['CategorÃ­a'] || row['Categor\u00c3\u00ada'] || row['category'] || row['Category'] || null;
+        const category_name = row['Categoría'] || row['Categoria'] || row['CategorÃ­a'] || row['Categor\u00c3\u00ada'] || row['category'] || row['Category'] || null;
         const cost_priceRaw = row['Precio de Costo'] ?? row['Costo'] ?? row['cost_price'] ?? row['Cost Price'] ?? null;
         const cost_price = cost_priceRaw != null && cost_priceRaw !== '' ? parseFloat(cost_priceRaw) : null;
-        const has_sales_bonus = row['Tiene Bono'] === 'SÃ­' || row['Tiene Bono'] === 'Si' || row['Tiene Bono'] === 'si' || row['Tiene Bono'] === 1 || row['has_sales_bonus'] === true;
+        const has_sales_bonus = row['Tiene Bono'] === 'Sí' || row['Tiene Bono'] === 'SÃ­' || row['Tiene Bono'] === 'Si' || row['Tiene Bono'] === 'si' || row['Tiene Bono'] === 1 || row['has_sales_bonus'] === true;
         const salesBonusRaw = row['Bono por Unidad'] ?? row['Bono'] ?? row['sales_bonus_per_unit'] ?? 0;
         const sales_bonus_per_unit = salesBonusRaw != null && salesBonusRaw !== '' ? parseFloat(salesBonusRaw) : 0;
-        const requires_prescription = row['Requiere Receta'] === 'SÃ­' || row['Requiere Receta'] === 'S\u00c3\u00ad' || row['Requiere Receta'] === 'Si' || row['Requiere Receta'] === 1 || row['requires_prescription'] === true || false;
+        const requires_prescription = row['Requiere Receta'] === 'Sí' || row['Requiere Receta'] === 'SÃ­' || row['Requiere Receta'] === 'S\u00c3\u00ad' || row['Requiere Receta'] === 'Si' || row['Requiere Receta'] === 1 || row['requires_prescription'] === true || false;
         const expiration_date = parseExcelDate(
           row['Fecha de Vencimiento'] ?? row['expiration_date'] ?? row['Expiration Date'] ?? row['Vencimiento']
         );
@@ -795,7 +868,7 @@ router.post('/import', authenticateToken, [
             }
             db.get('SELECT id FROM categories WHERE name = ?', [category_name], (catErr, category: any) => {
               if (catErr) {
-                results.errors.push(`Fila ${rowNum}: Error al buscar categorÃ­a "${category_name}"`);
+                results.errors.push(`Fila ${rowNum}: Error al buscar categoria "${category_name}"`);
                 resolveCat(null);
               } else if (category) {
                 resolveCat(category.id);
@@ -803,7 +876,7 @@ router.post('/import', authenticateToken, [
                 // Create category if it doesn't exist
                 db.run('INSERT INTO categories (name) VALUES (?)', [category_name], function(createErr) {
                   if (createErr) {
-                    results.errors.push(`Fila ${rowNum}: Error al crear categorÃ­a "${category_name}"`);
+                    results.errors.push(`Fila ${rowNum}: Error al crear categoria "${category_name}"`);
                     resolveCat(null);
                   } else {
                     resolveCat(this.lastID);
@@ -842,6 +915,16 @@ router.post('/import', authenticateToken, [
                   }
                   const productId = this.lastID;
                   db.run('INSERT INTO inventory (product_id, quantity) VALUES (?, 0)', [productId], () => {});
+                  db.run(
+                    `INSERT INTO product_presentations
+                     (product_id, presentation_type_id, name, barcode, conversion_factor, unit_price, cost_price, is_default, is_active)
+                     SELECT ?, id, ?, ?, 1, ?, ?, 1, 1
+                     FROM presentation_types
+                     WHERE name = 'Unidad'
+                     LIMIT 1`,
+                    [productId, presentation || 'Unidad', barcode, unit_price, cost_price != null && !isNaN(cost_price) ? cost_price : null],
+                    () => {}
+                  );
                   results.success++;
                   resolve();
                 }
@@ -865,4 +948,3 @@ router.post('/import', authenticateToken, [
 });
 
 export default router;
-

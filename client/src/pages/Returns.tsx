@@ -1,21 +1,34 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { useSearchParams } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
 import { returnsApi, CreateReturnRequest } from '../api/returns';
 import { salesApi } from '../api/sales';
+import { companySettingsApi } from '../api/companySettings';
 import { Download, Filter, Plus, RotateCcw } from 'lucide-react';
 import { format } from 'date-fns';
 import './Returns.css';
 
 const getToday = () => {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const peruDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Lima' }));
+  return peruDate.toISOString().slice(0, 10);
+};
+
+const getDateOffset = (daysOffset: number) => {
+  const [year, month, day] = getToday().split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + daysOffset);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
 };
 
 export default function Returns() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const { data: companySettings } = useQuery('company-settings', companySettingsApi.get);
+  const historyDays = Math.max(1, Number(companySettings?.non_admin_history_days || 5));
+  const minVisibleDate = getDateOffset(-historyDays);
+  const maxVisibleDate = getToday();
   const [searchParams] = useSearchParams();
   const saleIdParam = searchParams.get('sale_id');
   const [showModal, setShowModal] = useState(false);
@@ -35,7 +48,22 @@ export default function Returns() {
 
   const queryClient = useQueryClient();
 
-  const { data: returnsData } = useQuery(['returns', filters], () => returnsApi.getAll(filters));
+  const clampDate = (date?: string) => {
+    if (!date || isAdmin) return date || '';
+    if (date < minVisibleDate) return minVisibleDate;
+    if (date > maxVisibleDate) return maxVisibleDate;
+    return date;
+  };
+
+  const effectiveFilters = useMemo(
+    () => ({
+      start_date: clampDate(filters.start_date),
+      end_date: clampDate(filters.end_date),
+    }),
+    [filters, isAdmin, minVisibleDate, maxVisibleDate]
+  );
+
+  const { data: returnsData } = useQuery(['returns', effectiveFilters], () => returnsApi.getAll(effectiveFilters));
   const { data: salesData } = useQuery('sales-available-return', () => salesApi.getAvailableForReturn());
   const { data: selectedSale } = useQuery(
     ['sale', selectedSaleId],
@@ -142,7 +170,7 @@ export default function Returns() {
 
   const handleExportReturns = async () => {
     try {
-      await returnsApi.exportExcel(filters);
+      await returnsApi.exportExcel(effectiveFilters);
     } catch (error) {
       alert('No se pudo exportar el reporte de devoluciones.');
     }
@@ -178,7 +206,9 @@ export default function Returns() {
             <input
               type="date"
               value={filters.start_date}
-              onChange={(e) => setFilters({ ...filters, start_date: e.target.value })}
+              min={isAdmin ? undefined : minVisibleDate}
+              max={isAdmin ? undefined : maxVisibleDate}
+              onChange={(e) => setFilters({ ...filters, start_date: clampDate(e.target.value) })}
             />
           </div>
           <div className="form-group">
@@ -186,9 +216,14 @@ export default function Returns() {
             <input
               type="date"
               value={filters.end_date}
-              onChange={(e) => setFilters({ ...filters, end_date: e.target.value })}
+              min={isAdmin ? undefined : minVisibleDate}
+              max={isAdmin ? undefined : maxVisibleDate}
+              onChange={(e) => setFilters({ ...filters, end_date: clampDate(e.target.value) })}
             />
           </div>
+          {!isAdmin && (
+            <small className="filter-note">Solo se muestran tus devoluciones de los ultimos {historyDays} dias.</small>
+          )}
         </div>
       </div>
 

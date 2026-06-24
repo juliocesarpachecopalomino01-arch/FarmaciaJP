@@ -1,12 +1,75 @@
 ﻿import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { inventoryApi, InventoryItem } from '../api/inventory';
+import { inventoryApi, InventoryItem, InventoryMovementRequest } from '../api/inventory';
 import { productsApi } from '../api/products';
-import { categoriesApi } from '../api/categories';
+import { categoriesApi, Category } from '../api/categories';
 import { buildApiUrl } from '../api/client';
 import { printInventoryAdjustmentReceipt, printInventoryInitialLoadReceipt } from '../utils/printReceipt';
 import { Plus, Package, Edit, Upload, Download, Filter, Search, Boxes, AlertTriangle, TrendingUp, Wallet } from 'lucide-react';
 import './Inventory.css';
+
+type CategorySearchProps = {
+  categories: Category[];
+  value: string;
+  onChange: (value: string) => void;
+};
+
+function CategorySearch({ categories, value, onChange }: CategorySearchProps) {
+  const [open, setOpen] = useState(false);
+  const filteredCategories = useMemo(() => {
+    const query = value.trim().toLowerCase();
+    if (!query) return categories;
+    return categories.filter((category) => category.name.toLowerCase().includes(query));
+  }, [categories, value]);
+
+  const selectCategory = (categoryName: string) => {
+    onChange(categoryName);
+    setOpen(false);
+  };
+
+  return (
+    <div className="inventory-combobox">
+      <input
+        type="text"
+        value={value}
+        placeholder="Todas las categorías"
+        onChange={(event) => {
+          onChange(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        autoComplete="off"
+      />
+      {open && (
+        <div className="inventory-combobox-menu">
+          <button
+            type="button"
+            className={!value ? 'active' : ''}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => selectCategory('')}
+          >
+            Todas las categorías
+          </button>
+          {filteredCategories.map((category) => (
+            <button
+              type="button"
+              key={category.id}
+              className={category.name === value ? 'active' : ''}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => selectCategory(category.name)}
+            >
+              {category.name}
+            </button>
+          ))}
+          {filteredCategories.length === 0 && (
+            <div className="inventory-combobox-empty">No se encontraron categorías</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function exportInventoryExcel(filters: { search: string; category: string; status: string }) {
   const token = localStorage.getItem('token');
@@ -50,7 +113,7 @@ export default function Inventory() {
   });
   const [movementForm, setMovementForm] = useState({
     product_id: '',
-    movement_type: 'adjustment' as 'adjustment',
+    movement_type: 'adjustment_negative' as InventoryMovementRequest['movement_type'],
     quantity: '',
     reference_number: '',
     notes: '',
@@ -121,7 +184,7 @@ export default function Inventory() {
   const resetMovementForm = () => {
     setMovementForm({
       product_id: '',
-      movement_type: 'adjustment',
+      movement_type: 'adjustment_negative',
       quantity: '',
       reference_number: '',
       notes: '',
@@ -164,6 +227,10 @@ export default function Inventory() {
   };
 
   const inventoryItems = inventory || [];
+  const isPositiveAdjustment = movementForm.movement_type === 'adjustment_positive';
+  const adjustmentQuantityLabel = isPositiveAdjustment ? 'Cantidad a ingresar *' : 'Cantidad a descontar *';
+  const adjustmentQuantityPlaceholder = isPositiveAdjustment ? 'Unidades que se sumarán al stock' : 'Unidades que se descontarán del stock';
+  const adjustmentButtonLabel = isPositiveAdjustment ? 'Registrar e Imprimir Ajuste Positivo' : 'Registrar e Imprimir Ajuste Negativo';
   const lowStockItems = inventoryItems.filter((item) => item.quantity <= item.min_stock);
   const highStockItems = inventoryItems.filter((item) => item.max_stock > 0 && item.quantity >= item.max_stock);
   const inventoryValue = inventoryItems.reduce((total, item) => total + (Number(item.quantity || 0) * Number(item.unit_price || 0)), 0);
@@ -179,7 +246,8 @@ export default function Inventory() {
         item.category_name,
         item.location,
       ].some((value) => String(value || '').toLowerCase().includes(search));
-      const matchesCategory = !filters.category || item.category_name === filters.category;
+      const categorySearch = filters.category.trim().toLowerCase();
+      const matchesCategory = !categorySearch || String(item.category_name || '').toLowerCase().includes(categorySearch);
       const matchesStatus = !filters.status || status === filters.status;
       return matchesSearch && matchesCategory && matchesStatus;
     });
@@ -266,15 +334,11 @@ export default function Inventory() {
           </label>
           <label>
             Categoría
-            <select
+            <CategorySearch
+              categories={categories || []}
               value={filters.category}
-              onChange={(e) => setFilters({ ...filters, category: e.target.value })}
-            >
-              <option value="">Todas las categorías</option>
-              {categories?.map((category) => (
-                <option key={category.id} value={category.name}>{category.name}</option>
-              ))}
-            </select>
+              onChange={(category) => setFilters({ ...filters, category })}
+            />
           </label>
           <label>
             Estado
@@ -375,12 +439,27 @@ export default function Inventory() {
                 </select>
               </div>
               <div className="form-group">
-                <label>Cantidad faltante a descontar *</label>
+                <label>Tipo de ajuste *</label>
+                <select
+                  value={movementForm.movement_type}
+                  onChange={(e) => setMovementForm({
+                    ...movementForm,
+                    movement_type: e.target.value as InventoryMovementRequest['movement_type'],
+                  })}
+                  required
+                >
+                  <option value="adjustment_negative">Ajuste negativo - descontar stock</option>
+                  <option value="adjustment_positive">Ajuste positivo - ingresar stock</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>{adjustmentQuantityLabel}</label>
                 <input
                   type="number"
                   min="1"
                   value={movementForm.quantity}
                   onChange={(e) => setMovementForm({ ...movementForm, quantity: e.target.value })}
+                  placeholder={adjustmentQuantityPlaceholder}
                   required
                 />
               </div>
@@ -398,6 +477,7 @@ export default function Inventory() {
                 <textarea
                   value={movementForm.notes}
                   onChange={(e) => setMovementForm({ ...movementForm, notes: e.target.value })}
+                  placeholder={isPositiveAdjustment ? 'Ejemplo: sobrante encontrado en conteo físico' : 'Ejemplo: faltante encontrado en conteo físico'}
                   rows={3}
                   required
                 />
@@ -407,7 +487,7 @@ export default function Inventory() {
                   Cancelar
                 </button>
                 <button type="submit" className="btn-primary">
-                  Registrar e Imprimir Ajuste
+                  {adjustmentButtonLabel}
                 </button>
               </div>
             </form>

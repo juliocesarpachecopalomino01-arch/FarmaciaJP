@@ -25,6 +25,8 @@ export interface CashRegisterSummary {
   cash_movements_amount?: number;
   opening_balance: number;
   closing_balance: number | null;
+  cash_count_total?: number;
+  cash_count?: CashRegisterCashCount[];
   by_payment_method: Array<{
     payment_method: string;
     count: number;
@@ -41,6 +43,9 @@ export interface CloseCashRegisterResponse {
 export interface CashMovement {
   id: number;
   cash_register_id: number;
+  cash_account_id?: number | null;
+  cash_account_name?: string | null;
+  cash_account_type?: 'income' | 'expense' | 'both' | null;
   movement_type: string;
   amount: number;
   payment_method?: string | null;
@@ -54,6 +59,56 @@ export interface CashMovement {
   created_at: string;
 }
 
+export interface CashAccount {
+  id: number;
+  name: string;
+  account_type: 'income' | 'expense' | 'both';
+  description?: string | null;
+  is_active: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CashAccountInput {
+  name?: string;
+  account_type?: 'income' | 'expense' | 'both';
+  description?: string | null;
+  is_active?: number;
+}
+
+export interface ManualCashMovementInput {
+  movement_type: 'income' | 'expense';
+  amount: number;
+  payment_method?: string;
+  cash_account_id: number;
+  description?: string;
+}
+
+export interface CashDenomination {
+  id: number;
+  name: string;
+  value: number;
+  sort_order?: number;
+  is_active: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CashDenominationInput {
+  name?: string;
+  value?: number;
+  sort_order?: number;
+  is_active?: number;
+}
+
+export interface CashRegisterCashCount {
+  denomination_id: number;
+  denomination_name: string;
+  denomination_value: number;
+  quantity: number;
+  total: number;
+}
+
 export const cashRegistersApi = {
   getCurrent: async (): Promise<CashRegister | null> => {
     const response = await api.get<CashRegister | null>('/cash-registers/current');
@@ -65,7 +120,11 @@ export const cashRegistersApi = {
     return response.data;
   },
 
-  close: async (data: { closing_balance?: number; notes?: string }): Promise<CloseCashRegisterResponse> => {
+  close: async (data: {
+    closing_balance?: number;
+    denomination_counts?: Array<{ denomination_id: number; quantity: number }>;
+    notes?: string;
+  }): Promise<CloseCashRegisterResponse> => {
     const response = await api.post<CloseCashRegisterResponse>('/cash-registers/close', data);
     return response.data;
   },
@@ -88,6 +147,41 @@ export const cashRegistersApi = {
     payment_method?: string;
   }): Promise<CashMovement[]> => {
     const response = await api.get<CashMovement[]>('/cash-registers/movements', { params: filters });
+    return response.data;
+  },
+
+  getAccounts: async (): Promise<CashAccount[]> => {
+    const response = await api.get<CashAccount[]>('/cash-registers/accounts');
+    return response.data;
+  },
+
+  createAccount: async (data: CashAccountInput): Promise<CashAccount> => {
+    const response = await api.post<CashAccount>('/cash-registers/accounts', data);
+    return response.data;
+  },
+
+  updateAccount: async (id: number, data: CashAccountInput): Promise<CashAccount> => {
+    const response = await api.put<CashAccount>(`/cash-registers/accounts/${id}`, data);
+    return response.data;
+  },
+
+  createManualMovement: async (data: ManualCashMovementInput): Promise<CashMovement> => {
+    const response = await api.post<CashMovement>('/cash-registers/movements/manual', data);
+    return response.data;
+  },
+
+  getDenominations: async (): Promise<CashDenomination[]> => {
+    const response = await api.get<CashDenomination[]>('/cash-registers/denominations');
+    return response.data;
+  },
+
+  createDenomination: async (data: CashDenominationInput): Promise<CashDenomination> => {
+    const response = await api.post<CashDenomination>('/cash-registers/denominations', data);
+    return response.data;
+  },
+
+  updateDenomination: async (id: number, data: CashDenominationInput): Promise<CashDenomination> => {
+    const response = await api.put<CashDenomination>(`/cash-registers/denominations/${id}`, data);
     return response.data;
   },
 

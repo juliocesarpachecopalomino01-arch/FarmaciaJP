@@ -1,10 +1,78 @@
-﻿import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { productsApi, Product } from '../api/products';
-import { categoriesApi } from '../api/categories';
+import { productPresentationsApi, productsApi, Product } from '../api/products';
+import { categoriesApi, Category } from '../api/categories';
 import { priceHistoryApi } from '../api/priceHistory';
 import { Plus, Edit, Search, History, Layers, Filter, CheckCircle2, XCircle, Package, Power, PowerOff, Upload, QrCode, Download, Boxes, AlertTriangle, BadgeDollarSign, ShieldCheck } from 'lucide-react';
 import './Products.css';
+
+type CategoryFilterSearchProps = {
+  categories: Category[];
+  selectedId?: number;
+  onSelect: (categoryId?: number) => void;
+};
+
+function CategoryFilterSearch({ categories, selectedId, onSelect }: CategoryFilterSearchProps) {
+  const selectedCategory = categories.find((category) => category.id === selectedId);
+  const [value, setValue] = useState(selectedCategory?.name || '');
+  const [open, setOpen] = useState(false);
+
+  const filteredCategories = useMemo(() => {
+    const query = value.trim().toLowerCase();
+    if (!query) return categories;
+    return categories.filter((category) => category.name.toLowerCase().includes(query));
+  }, [categories, value]);
+
+  const selectCategory = (category?: Category) => {
+    setValue(category?.name || '');
+    onSelect(category?.id);
+    setOpen(false);
+  };
+
+  return (
+    <div className="products-combobox">
+      <input
+        type="text"
+        value={value}
+        placeholder="Todas las categorías"
+        onChange={(event) => {
+          setValue(event.target.value);
+          onSelect(undefined);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        autoComplete="off"
+      />
+      {open && (
+        <div className="products-combobox-menu">
+          <button
+            type="button"
+            className={!selectedId && !value ? 'active' : ''}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => selectCategory()}
+          >
+            Todas las categorías
+          </button>
+          {filteredCategories.map((category) => (
+            <button
+              type="button"
+              key={category.id}
+              className={category.id === selectedId ? 'active' : ''}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => selectCategory(category)}
+            >
+              {category.name}
+            </button>
+          ))}
+          {filteredCategories.length === 0 && (
+            <div className="products-combobox-empty">No se encontraron categorías</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Products() {
   const [search, setSearch] = useState('');
@@ -14,10 +82,19 @@ export default function Products() {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
-  const [, setShowLotsModal] = useState(false);
+  const [showPresentationsModal, setShowPresentationsModal] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [presentationForm, setPresentationForm] = useState({
+    presentation_type_id: '',
+    name: '',
+    barcode: '',
+    conversion_factor: '1',
+    unit_price: '',
+    cost_price: '',
+    is_default: false,
+  });
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -55,6 +132,14 @@ export default function Products() {
     { enabled: !!selectedProductId && showQRModal }
   );
 
+  const { data: presentationTypes = [] } = useQuery('presentation-types', productPresentationsApi.getTypes);
+
+  const { data: productPresentations = [] } = useQuery(
+    ['product-presentations', selectedProductId],
+    () => selectedProductId ? productPresentationsApi.getByProduct(selectedProductId) : Promise.resolve([]),
+    { enabled: !!selectedProductId && showPresentationsModal }
+  );
+
   const createMutation = useMutation(productsApi.create, {
     onSuccess: () => {
       queryClient.invalidateQueries('products');
@@ -86,6 +171,43 @@ export default function Products() {
       alert(error?.response?.data?.error || 'Error al importar productos');
     },
   });
+
+  const createPresentationMutation = useMutation(
+    (data: { productId: number; presentation: any }) =>
+      productPresentationsApi.create(data.productId, data.presentation),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries(['product-presentations', selectedProductId]);
+        queryClient.invalidateQueries('products');
+        setPresentationForm({
+          presentation_type_id: '',
+          name: '',
+          barcode: '',
+          conversion_factor: '1',
+          unit_price: '',
+          cost_price: '',
+          is_default: false,
+        });
+      },
+      onError: (error: any) => {
+        alert(error?.response?.data?.error || 'Error al guardar la presentación');
+      },
+    }
+  );
+
+  const updatePresentationMutation = useMutation(
+    (data: { id: number; presentation: any }) =>
+      productPresentationsApi.update(data.id, data.presentation),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries(['product-presentations', selectedProductId]);
+        queryClient.invalidateQueries('products');
+      },
+      onError: (error: any) => {
+        alert(error?.response?.data?.error || 'Error al actualizar la presentación');
+      },
+    }
+  );
 
   const resetForm = () => {
     setFormData({
@@ -147,6 +269,53 @@ export default function Products() {
     setSelectedProductId(product.id);
     setSelectedProduct(product);
     setShowQRModal(true);
+  };
+
+  const handleShowPresentations = (product: Product) => {
+    setSelectedProductId(product.id);
+    setSelectedProduct(product);
+    setPresentationForm({
+      presentation_type_id: '',
+      name: '',
+      barcode: '',
+      conversion_factor: '1',
+      unit_price: product.unit_price?.toString() || '',
+      cost_price: product.cost_price?.toString() || '',
+      is_default: false,
+    });
+    setShowPresentationsModal(true);
+  };
+
+  const handleCreatePresentation = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProductId) return;
+    createPresentationMutation.mutate({
+      productId: selectedProductId,
+      presentation: {
+        presentation_type_id: presentationForm.presentation_type_id ? Number(presentationForm.presentation_type_id) : undefined,
+        name: presentationForm.name,
+        barcode: presentationForm.barcode || undefined,
+        conversion_factor: Number(presentationForm.conversion_factor || 1),
+        unit_price: Number(presentationForm.unit_price || 0),
+        cost_price: presentationForm.cost_price ? Number(presentationForm.cost_price) : undefined,
+        is_default: presentationForm.is_default ? 1 : 0,
+      },
+    });
+  };
+
+  const handleTogglePresentationActive = (presentation: any) => {
+    const isActive = Number(presentation.is_active) === 1;
+    const nextActive = isActive ? 0 : 1;
+    const action = nextActive ? 'activar' : 'desactivar';
+    if (!window.confirm(`¿Está seguro de ${action} la presentación "${presentation.name}"?`)) return;
+
+    updatePresentationMutation.mutate({
+      id: presentation.id,
+      presentation: {
+        is_active: nextActive,
+        ...(nextActive === 0 && presentation.is_default ? { is_default: 0 } : {}),
+      },
+    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -277,17 +446,11 @@ export default function Products() {
           </div>
           <div className="filter-group">
             <label>Categoría</label>
-            <select
-              value={categoryFilter || ''}
-              onChange={(e) => setCategoryFilter(e.target.value ? Number(e.target.value) : undefined)}
-            >
-              <option value="">Todas las categorías</option>
-              {categories?.map((cat) => (
-                <option key={cat.id} value={cat.id}>
-                  {cat.name}
-                </option>
-              ))}
-            </select>
+            <CategoryFilterSearch
+              categories={categories || []}
+              selectedId={categoryFilter}
+              onSelect={setCategoryFilter}
+            />
           </div>
           <div className="filter-group">
             <label>Estado</label>
@@ -420,12 +583,9 @@ export default function Products() {
                       <History size={16} />
                     </button>
                     <button 
-                      onClick={() => {
-                        setSelectedProductId(product.id);
-                        setShowLotsModal(true);
-                      }} 
+                      onClick={() => handleShowPresentations(product)}
                       className="btn-icon action-layers"
-                      title="Ver lotes"
+                      title="Presentaciones de venta"
                     >
                       <Layers size={16} />
                     </button>
@@ -606,6 +766,178 @@ export default function Products() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showPresentationsModal && selectedProduct && (
+        <div className="modal-overlay" onClick={() => { setShowPresentationsModal(false); setSelectedProductId(null); setSelectedProduct(null); }}>
+          <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
+            <h2>Presentaciones de Venta</h2>
+            <p className="modal-subtitle">
+              {selectedProduct.name}
+              {selectedProduct.laboratory && <span className="modal-subtitle-code"> · {selectedProduct.laboratory}</span>}
+            </p>
+
+            <div className="presentation-manager">
+              <div className="presentation-list">
+                <table className="history-table">
+                  <thead>
+                    <tr>
+                      <th>Presentación</th>
+                      <th>Código</th>
+                      <th>Factor</th>
+                      <th>Precio Venta</th>
+                      <th>Costo</th>
+                      <th>Default</th>
+                      <th>Estado</th>
+                      <th>Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {productPresentations.length > 0 ? (
+                      productPresentations.map((presentation) => (
+                        <tr key={presentation.id}>
+                          <td>
+                            <strong>{presentation.name}</strong>
+                            {presentation.type_name && <small className="table-subtext">{presentation.type_name}</small>}
+                          </td>
+                          <td>{presentation.barcode || '-'}</td>
+                          <td>{presentation.conversion_factor} und.</td>
+                          <td>S/ {Number(presentation.unit_price || 0).toFixed(2)}</td>
+                          <td>{presentation.cost_price ? `S/ ${Number(presentation.cost_price).toFixed(2)}` : '-'}</td>
+                          <td>{presentation.is_default ? 'Sí' : 'No'}</td>
+                          <td>
+                            <span className={presentation.is_active ? 'status-active' : 'status-inactive'}>
+                              {presentation.is_active ? (
+                                <>
+                                  <CheckCircle2 size={13} />
+                                  Activa
+                                </>
+                              ) : (
+                                <>
+                                  <XCircle size={13} />
+                                  Inactiva
+                                </>
+                              )}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="btn-icon action-toggle"
+                              title={presentation.is_active ? 'Desactivar presentación' : 'Activar presentación'}
+                              disabled={updatePresentationMutation.isLoading}
+                              onClick={() => handleTogglePresentationActive(presentation)}
+                            >
+                              {presentation.is_active ? <PowerOff size={15} /> : <Power size={15} />}
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={8} className="empty-message">Este producto aún no tiene presentaciones configuradas.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <form className="presentation-form" onSubmit={handleCreatePresentation}>
+                <h3>Nueva presentación</h3>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Tipo</label>
+                    <select
+                      value={presentationForm.presentation_type_id}
+                      onChange={(e) => {
+                        const selectedType = presentationTypes.find((type) => type.id === Number(e.target.value));
+                        setPresentationForm({
+                          ...presentationForm,
+                          presentation_type_id: e.target.value,
+                          name: presentationForm.name || selectedType?.name || '',
+                        });
+                      }}
+                    >
+                      <option value="">Seleccionar tipo</option>
+                      {presentationTypes.map((type) => (
+                        <option key={type.id} value={type.id}>{type.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Nombre *</label>
+                    <input
+                      value={presentationForm.name}
+                      onChange={(e) => setPresentationForm({ ...presentationForm, name: e.target.value })}
+                      placeholder="Ej. Caja x 12"
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Código</label>
+                    <input
+                      value={presentationForm.barcode}
+                      onChange={(e) => setPresentationForm({ ...presentationForm, barcode: e.target.value })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Factor stock *</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={presentationForm.conversion_factor}
+                      onChange={(e) => setPresentationForm({ ...presentationForm, conversion_factor: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Precio venta *</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={presentationForm.unit_price}
+                      onChange={(e) => setPresentationForm({ ...presentationForm, unit_price: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Costo referencial</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={presentationForm.cost_price}
+                      onChange={(e) => setPresentationForm({ ...presentationForm, cost_price: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={presentationForm.is_default}
+                    onChange={(e) => setPresentationForm({ ...presentationForm, is_default: e.target.checked })}
+                  />
+                  Usar como presentación principal en ventas
+                </label>
+                <button type="submit" className="btn-primary" disabled={createPresentationMutation.isLoading}>
+                  <Plus size={14} />
+                  Agregar presentación
+                </button>
+              </form>
+            </div>
+
+            <div className="modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => { setShowPresentationsModal(false); setSelectedProductId(null); setSelectedProduct(null); }}>
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       )}

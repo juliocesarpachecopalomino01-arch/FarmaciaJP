@@ -15,6 +15,7 @@ export interface CompanySettings {
   receipt_width_mm?: number;
   show_logo: number;
   show_qr: number;
+  non_admin_history_days?: number;
   has_cash_reopen_password?: boolean;
   has_return_password?: boolean;
 }

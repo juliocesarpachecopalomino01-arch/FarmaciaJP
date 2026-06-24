@@ -74,6 +74,72 @@
   color: var(--text);
 }
 
+.product-search-filter {
+  position: relative;
+  width: 100%;
+}
+
+.product-search-filter input {
+  width: 100%;
+}
+
+.product-search-filter-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 18rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+}
+
+.product-search-filter-menu button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.15rem;
+  padding: 0.55rem 0.75rem;
+  border: 0;
+  border-bottom: 1px solid var(--border-light);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.product-search-filter-menu button:hover,
+.product-search-filter-menu button.active {
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.12), rgba(16, 185, 129, 0.1));
+}
+
+.product-search-filter-menu strong {
+  font-size: 0.82rem;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-search-filter-menu span {
+  color: var(--text-light);
+  font-size: 0.75rem;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-search-filter-empty {
+  padding: 0.75rem;
+  color: var(--text-light);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
 .filter-actions {
   display: flex;
   justify-content: flex-end;
@@ -159,6 +225,16 @@
 .movement-badge.adjustment {
   background: var(--info-light);
   color: var(--info);
+}
+
+.movement-badge.adjustment_positive {
+  background: var(--success-light);
+  color: var(--success-dark);
+}
+
+.movement-badge.adjustment_negative {
+  background: var(--warning-light);
+  color: var(--warning-dark);
 }
 
 .numeric {

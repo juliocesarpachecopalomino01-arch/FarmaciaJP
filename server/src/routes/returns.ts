@@ -3,6 +3,7 @@ import { body, validationResult, query } from 'express-validator';
 import { db } from '../database/init';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { logAction } from '../middleware/audit';
+import { getNonAdminHistoryDays } from '../utils/companySettings';
 
 const router = express.Router();
 
@@ -49,13 +50,39 @@ function getOpenCashRegister(userId: number): Promise<{ id: number }> {
   });
 }
 
+function getPeruDateString() {
+  const now = new Date();
+  const peruDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Lima' }));
+  return peruDate.toISOString().slice(0, 10);
+}
+
+function getPeruDateStringOffset(daysOffset: number) {
+  const [year, month, day] = getPeruDateString().split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + daysOffset);
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 // Get all returns
 router.get('/', authenticateToken, [
   query('start_date').optional(),
   query('end_date').optional(),
   query('sale_id').optional().isInt(),
-], (req: AuthRequest, res: Response) => {
+], async (req: AuthRequest, res: Response) => {
   const { start_date, end_date, sale_id } = req.query;
+  const isAdmin = req.user?.role === 'admin';
+  const historyDays = await getNonAdminHistoryDays();
+  const minVisibleDate = getPeruDateStringOffset(-historyDays);
+  const maxVisibleDate = getPeruDateString();
+  const effectiveStartDate = isAdmin
+    ? start_date
+    : (start_date && String(start_date) > minVisibleDate ? String(start_date) : minVisibleDate);
+  const effectiveEndDate = isAdmin
+    ? end_date
+    : (end_date && String(end_date) < maxVisibleDate ? String(end_date) : maxVisibleDate);
 
   let query = `
     SELECT r.*, s.sale_number, c.name as customer_name, u.username as user_name
@@ -67,14 +94,19 @@ router.get('/', authenticateToken, [
   `;
   const params: any[] = [];
 
-  if (start_date) {
-    query += ' AND DATE(r.created_at) >= ?';
-    params.push(start_date);
+  if (!isAdmin) {
+    query += ' AND r.user_id = ?';
+    params.push(req.user!.id);
   }
 
-  if (end_date) {
+  if (effectiveStartDate) {
+    query += ' AND DATE(r.created_at) >= ?';
+    params.push(effectiveStartDate);
+  }
+
+  if (effectiveEndDate) {
     query += ' AND DATE(r.created_at) <= ?';
-    params.push(end_date);
+    params.push(effectiveEndDate);
   }
 
   if (sale_id) {
@@ -110,6 +142,9 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res: Response) => {
       }
       if (!returnData) {
         return res.status(404).json({ error: 'Return not found' });
+      }
+      if (req.user?.role !== 'admin' && returnData.user_id !== req.user!.id) {
+        return res.status(403).json({ error: 'No autorizado' });
       }
 
       // Get return items
@@ -157,11 +192,13 @@ router.post('/', authenticateToken, [
 
   // Get sale info (must belong to same user and same cash register ID)
   db.get(
-    `SELECT id, sale_number, customer_id, user_id, cash_register_id, payment_method
-     FROM sales
-     WHERE id = ?`,
+    `SELECT s.id, s.sale_number, s.customer_id, s.user_id, s.cash_register_id, s.payment_method,
+            COALESCE(cr.accounting_date, DATE(s.created_at)) as cash_accounting_date
+     FROM sales s
+     LEFT JOIN cash_registers cr ON cr.id = s.cash_register_id
+     WHERE s.id = ?`,
     [sale_id],
-    (err, sale: any) => {
+    async (err, sale: any) => {
       if (err) return res.status(500).json({ error: 'Database error' });
       if (!sale) return res.status(404).json({ error: 'Sale not found' });
 
@@ -170,6 +207,17 @@ router.post('/', authenticateToken, [
         return res.status(403).json({
           error: 'Solo el vendedor que realizó la venta puede procesar la devolución.',
         });
+      }
+
+      if (req.user?.role !== 'admin') {
+        const historyDays = await getNonAdminHistoryDays();
+        const minVisibleDate = getPeruDateStringOffset(-historyDays);
+        const maxVisibleDate = getPeruDateString();
+        if (sale.cash_accounting_date < minVisibleDate || sale.cash_accounting_date > maxVisibleDate) {
+          return res.status(403).json({
+            error: `Solo puedes procesar devoluciones de ventas dentro de los ultimos ${historyDays} dias.`,
+          });
+        }
       }
 
       // Step 1: Validate sale has cash register
@@ -254,6 +302,7 @@ router.post('/', authenticateToken, [
                             sale_item_id: item.sale_item_id,
                             product_id: saleItem.product_id,
                             quantity: item.quantity,
+                            stock_quantity: item.quantity * (Number(saleItem.conversion_factor) || 1),
                             unit_price: saleItem.unit_price,
                             refund_amount: refundAmount,
                           });
@@ -304,7 +353,7 @@ router.post('/', authenticateToken, [
                           // Restore inventory
                           db.run(
                             'UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-                            [item.quantity, item.product_id],
+                            [item.stock_quantity, item.product_id],
                             () => {}
                           );
 
@@ -312,7 +361,7 @@ router.post('/', authenticateToken, [
                           db.run(
                             `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, notes)
                              VALUES (?, 'entry', ?, ?, ?, ?)`,
-                            [item.product_id, item.quantity, returnNumber, req.user!.id, 'Devolución de venta'],
+                            [item.product_id, item.stock_quantity, returnNumber, req.user!.id, 'Devolución de venta'],
                             () => {}
                           );
 

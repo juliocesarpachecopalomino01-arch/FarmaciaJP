@@ -202,6 +202,13 @@ export default function Purchases() {
       product.category_name,
       product.laboratory,
       product.presentation,
+      ...(product.presentations || []).flatMap((presentation) => [
+        presentation.name,
+        presentation.type_name,
+        presentation.barcode,
+        presentation.unit_price?.toFixed(2),
+        presentation.cost_price?.toFixed(2),
+      ]),
       product.sanitary_registration,
       product.lot_number,
       product.unit_price?.toFixed(2),
@@ -216,9 +223,14 @@ export default function Purchases() {
     const name = normalizeSearchText(product.name);
     const barcode = normalizeSearchText(product.barcode);
     const displayName = normalizeSearchText(getProductDisplayName(product));
+    const presentationHit = (product.presentations || []).some((presentation) => {
+      const presentationName = normalizeSearchText(presentation.name);
+      const presentationBarcode = normalizeSearchText(presentation.barcode);
+      return presentationName.startsWith(search) || presentationBarcode.startsWith(search);
+    });
 
     if (name === search || barcode === search) return 0;
-    if (name.startsWith(search) || barcode.startsWith(search)) return 1;
+    if (name.startsWith(search) || barcode.startsWith(search) || presentationHit) return 1;
     if (displayName.includes(search)) return 2;
     return 3;
   };
@@ -259,7 +271,6 @@ export default function Purchases() {
     }
     setProductSearch('');
     setIsProductSearchOpen(false);
-    window.requestAnimationFrame(() => productSearchRef.current?.focus());
   };
 
   const removeFromCart = (productId: number) => {
@@ -282,7 +293,6 @@ export default function Purchases() {
     }
     setEditProductSearch('');
     setIsEditProductSearchOpen(false);
-    window.requestAnimationFrame(() => editProductSearchRef.current?.focus());
   };
 
   const removeFromEditCart = (productId: number) => setEditCart(editCart.filter((i) => i.product_id !== productId));

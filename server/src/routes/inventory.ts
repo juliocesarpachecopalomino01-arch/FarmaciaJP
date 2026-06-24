@@ -6,12 +6,14 @@ import * as XLSX from 'xlsx';
 
 const router = express.Router();
 
+type MovementType = 'entry' | 'exit' | 'adjustment' | 'adjustment_positive' | 'adjustment_negative';
+
 type MovementRow = {
   id: number;
   product_id: number;
   product_name: string;
   barcode?: string;
-  movement_type: 'entry' | 'exit' | 'adjustment';
+  movement_type: MovementType;
   quantity: number;
   reference_number?: string;
   notes?: string;
@@ -19,19 +21,32 @@ type MovementRow = {
   created_at: string;
 };
 
+function isPositiveAdjustment(movementType: string) {
+  return movementType === 'adjustment_positive';
+}
+
+function isNegativeAdjustment(movementType: string) {
+  return movementType === 'adjustment_negative' || movementType === 'adjustment';
+}
+
+function normalizeManualAdjustmentType(movementType: string): MovementType {
+  return movementType === 'adjustment' ? 'adjustment_negative' : movementType as MovementType;
+}
+
 function applyMovementBalance(balance: number, movement: MovementRow) {
   const quantity = Number(movement.quantity) || 0;
   if (movement.movement_type === 'entry') return balance + quantity;
   if (movement.movement_type === 'exit') return balance - quantity;
+  if (isPositiveAdjustment(movement.movement_type)) return balance + quantity;
   return balance - quantity;
 }
 
 function movementAmounts(previousBalance: number, movement: MovementRow) {
   const quantity = Number(movement.quantity) || 0;
-  if (movement.movement_type === 'entry') {
+  if (movement.movement_type === 'entry' || isPositiveAdjustment(movement.movement_type)) {
     return { entry: quantity, exit: 0, balance: previousBalance + quantity };
   }
-  if (movement.movement_type === 'exit') {
+  if (movement.movement_type === 'exit' || isNegativeAdjustment(movement.movement_type)) {
     return { entry: 0, exit: quantity, balance: previousBalance - quantity };
   }
 
@@ -143,8 +158,10 @@ router.put('/:id', authenticateToken, [
 // Add inventory movement (entry/exit/adjustment)
 router.post('/movement', authenticateToken, [
   body('product_id').isInt().withMessage('Product ID is required'),
-  body('movement_type').isIn(['adjustment']).withMessage('Solo se permiten ajustes manuales desde inventario'),
-  body('quantity').isInt({ min: 1 }).withMessage('La cantidad faltante debe ser mayor a cero'),
+  body('movement_type')
+    .isIn(['adjustment_positive', 'adjustment_negative', 'adjustment'])
+    .withMessage('Solo se permiten ajustes manuales desde inventario'),
+  body('quantity').isInt({ min: 1 }).withMessage('La cantidad debe ser mayor a cero'),
   body('notes').trim().notEmpty().withMessage('El motivo del ajuste es obligatorio'),
 ], (req: AuthRequest, res) => {
   const errors = validationResult(req);
@@ -159,6 +176,7 @@ router.post('/movement', authenticateToken, [
     reference_number,
     notes,
   } = req.body;
+  const normalizedMovementType = normalizeManualAdjustmentType(String(movement_type));
 
   // Get current inventory
   db.get('SELECT * FROM inventory WHERE product_id = ?', [product_id], (err, inventory: any) => {
@@ -170,16 +188,17 @@ router.post('/movement', authenticateToken, [
       return res.status(404).json({ error: 'Inventory not found for this product' });
     }
 
-    let newQuantity = inventory.quantity;
-    if (movement_type === 'entry') {
-      newQuantity += quantity;
-    } else if (movement_type === 'exit') {
-      return res.status(400).json({ error: 'Las salidas se registran desde ventas, no desde movimientos manuales' });
-    } else if (movement_type === 'adjustment') {
-      newQuantity -= quantity;
+    let newQuantity = Number(inventory.quantity) || 0;
+    const movementQuantity = Number(quantity) || 0;
+    if (normalizedMovementType === 'adjustment_positive') {
+      newQuantity += movementQuantity;
+    } else if (normalizedMovementType === 'adjustment_negative') {
+      newQuantity -= movementQuantity;
       if (newQuantity < 0) {
         return res.status(400).json({ error: 'El ajuste no puede descontar mas stock del disponible' });
       }
+    } else {
+      return res.status(400).json({ error: 'Tipo de ajuste invalido' });
     }
 
     // Update inventory
@@ -192,11 +211,12 @@ router.post('/movement', authenticateToken, [
         }
 
         // Record movement
-        const adjustmentReference = reference_number || `AJU-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+        const referencePrefix = normalizedMovementType === 'adjustment_positive' ? 'AJP' : 'AJN';
+        const adjustmentReference = reference_number || `${referencePrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
         db.run(
           `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, notes, user_id)
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [product_id, movement_type, quantity, adjustmentReference, notes || null, req.user?.id || null],
+          [product_id, normalizedMovementType, movementQuantity, adjustmentReference, notes || null, req.user?.id || null],
           function(err) {
             if (err) {
               return res.status(500).json({ error: 'Database error' });
@@ -205,7 +225,10 @@ router.post('/movement', authenticateToken, [
               id: this.lastID,
               new_quantity: newQuantity,
               reference_number: adjustmentReference,
-              message: 'Inventory movement recorded successfully',
+              movement_type: normalizedMovementType,
+              message: normalizedMovementType === 'adjustment_positive'
+                ? 'Ajuste positivo registrado correctamente'
+                : 'Ajuste negativo registrado correctamente',
             });
           }
         );
@@ -217,7 +240,7 @@ router.post('/movement', authenticateToken, [
 // Get inventory movements
 router.get('/movements', [
   query('product_id').optional().isInt(),
-  query('movement_type').optional().isIn(['entry', 'exit', 'adjustment']),
+  query('movement_type').optional().isIn(['entry', 'exit', 'adjustment', 'adjustment_positive', 'adjustment_negative']),
   query('start_date').optional(),
   query('end_date').optional(),
 ], (req, res) => {
@@ -240,8 +263,12 @@ router.get('/movements', [
   }
 
   if (movement_type) {
-    query += ' AND im.movement_type = ?';
-    params.push(movement_type);
+    if (movement_type === 'adjustment_negative' || movement_type === 'adjustment') {
+      query += " AND im.movement_type IN ('adjustment_negative', 'adjustment')";
+    } else {
+      query += ' AND im.movement_type = ?';
+      params.push(movement_type);
+    }
   }
 
   if (start_date) {
@@ -300,7 +327,7 @@ router.get('/kardex/:productId', [
           });
 
           const currentStock = Number(product.current_stock) || 0;
-          const hasAdjustment = rows.some((movement) => movement.movement_type === 'adjustment');
+          const hasAdjustment = rows.some((movement) => isPositiveAdjustment(movement.movement_type) || isNegativeAdjustment(movement.movement_type));
           const openingOffset = hasAdjustment ? 0 : currentStock - computedFinalBalance;
           let runningBalance = openingOffset;
           let openingBalance = openingOffset;

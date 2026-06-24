@@ -145,6 +145,7 @@ export function initializeDatabase(): Promise<void> {
           receipt_width_mm INTEGER DEFAULT 80,
           show_logo INTEGER DEFAULT 1,
           show_qr INTEGER DEFAULT 1,
+          non_admin_history_days INTEGER DEFAULT 5,
           cash_reopen_password TEXT DEFAULT 'admin123',
           return_password TEXT DEFAULT 'd3v0luc10n$2026$*',
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -192,6 +193,38 @@ export function initializeDatabase(): Promise<void> {
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (product_id) REFERENCES products(id),
           FOREIGN KEY (changed_by) REFERENCES users(id)
+        )
+      `);
+
+      // Presentation types catalogue. A type is reusable: Unidad, Tableta, Frasco, Caja, etc.
+      db.run(`
+        CREATE TABLE IF NOT EXISTS presentation_types (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT UNIQUE NOT NULL,
+          description TEXT,
+          is_active INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // Product-specific sale presentations. Inventory remains stored in base units.
+      db.run(`
+        CREATE TABLE IF NOT EXISTS product_presentations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id INTEGER NOT NULL,
+          presentation_type_id INTEGER,
+          name TEXT NOT NULL,
+          barcode TEXT,
+          conversion_factor INTEGER NOT NULL DEFAULT 1,
+          unit_price REAL NOT NULL,
+          cost_price REAL,
+          is_default INTEGER DEFAULT 0,
+          is_active INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (presentation_type_id) REFERENCES presentation_types(id)
         )
       `);
 
@@ -297,6 +330,10 @@ export function initializeDatabase(): Promise<void> {
           sale_id INTEGER NOT NULL,
           product_id INTEGER NOT NULL,
           quantity INTEGER NOT NULL,
+          presentation_id INTEGER,
+          presentation_name TEXT,
+          conversion_factor INTEGER DEFAULT 1,
+          stock_quantity INTEGER,
           unit_price REAL NOT NULL,
           cost_price REAL,
           discount REAL DEFAULT 0,
@@ -304,7 +341,8 @@ export function initializeDatabase(): Promise<void> {
           sales_bonus_total REAL DEFAULT 0,
           subtotal REAL NOT NULL,
           FOREIGN KEY (sale_id) REFERENCES sales(id),
-          FOREIGN KEY (product_id) REFERENCES products(id)
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (presentation_id) REFERENCES product_presentations(id)
         )
       `);
 
@@ -388,11 +426,16 @@ export function initializeDatabase(): Promise<void> {
           purchase_id INTEGER NOT NULL,
           product_id INTEGER NOT NULL,
           quantity INTEGER NOT NULL,
+          presentation_id INTEGER,
+          presentation_name TEXT,
+          conversion_factor INTEGER DEFAULT 1,
+          stock_quantity INTEGER,
           unit_price REAL NOT NULL,
           cost_price REAL NOT NULL,
           subtotal REAL NOT NULL,
           FOREIGN KEY (purchase_id) REFERENCES purchases(id),
-          FOREIGN KEY (product_id) REFERENCES products(id)
+          FOREIGN KEY (product_id) REFERENCES products(id),
+          FOREIGN KEY (presentation_id) REFERENCES product_presentations(id)
         )
       `);
 
@@ -582,6 +625,7 @@ export function initializeDatabase(): Promise<void> {
         addColumn('receipt_width_mm', 'INTEGER DEFAULT 80');
         addColumn('show_logo', 'INTEGER DEFAULT 1');
         addColumn('show_qr', 'INTEGER DEFAULT 1');
+        addColumn('non_admin_history_days', 'INTEGER DEFAULT 5');
         addColumn('cash_reopen_password', "TEXT DEFAULT 'admin123'");
         addColumn('return_password', "TEXT DEFAULT 'd3v0luc10n$2026$*'");
       });
@@ -613,6 +657,38 @@ export function initializeDatabase(): Promise<void> {
         }
       });
 
+      db.run(`
+        INSERT OR IGNORE INTO presentation_types (name, description)
+        VALUES
+          ('Unidad', 'Venta por unidad base'),
+          ('Tableta', 'Venta por tableta'),
+          ('Blíster', 'Venta por blíster'),
+          ('Frasco', 'Venta por frasco'),
+          ('Caja', 'Venta por caja'),
+          ('Ampolla', 'Venta por ampolla'),
+          ('Sobre', 'Venta por sobre')
+      `);
+
+      db.run(`
+        INSERT INTO product_presentations (product_id, presentation_type_id, name, barcode, conversion_factor, unit_price, cost_price, is_default, is_active)
+        SELECT
+          p.id,
+          (SELECT id FROM presentation_types WHERE name = 'Unidad' LIMIT 1),
+          COALESCE(NULLIF(p.presentation, ''), 'Unidad'),
+          p.barcode,
+          1,
+          p.unit_price,
+          p.cost_price,
+          1,
+          1
+        FROM products p
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM product_presentations pp
+          WHERE pp.product_id = p.id
+        )
+      `);
+
       db.all('PRAGMA table_info(sale_items)', (err, columns: any[]) => {
         if (err) {
           console.error('Error checking sale_items table structure:', err);
@@ -632,8 +708,53 @@ export function initializeDatabase(): Promise<void> {
           addColumn('sales_bonus_per_unit', 'REAL DEFAULT 0');
           addColumn('sales_bonus_total', 'REAL DEFAULT 0');
           addColumn('cost_price', 'REAL');
+          addColumn('presentation_id', 'INTEGER');
+          addColumn('presentation_name', 'TEXT');
+          addColumn('conversion_factor', 'INTEGER DEFAULT 1');
+          addColumn('stock_quantity', 'INTEGER');
         }
       });
+
+      db.all('PRAGMA table_info(purchase_items)', (err, columns: any[]) => {
+        if (err) {
+          console.error('Error checking purchase_items table structure:', err);
+        } else {
+          const colNames = (columns || []).map((col) => col.name);
+          const addColumn = (name: string, type: string) => {
+            if (colNames.includes(name)) return;
+            db.run(`ALTER TABLE purchase_items ADD COLUMN ${name} ${type}`, (alterErr) => {
+              if (alterErr) {
+                console.error(`Error adding ${name} column to purchase_items table:`, alterErr);
+              } else {
+                console.log(`Column ${name} added to purchase_items table`);
+              }
+            });
+          };
+
+          addColumn('presentation_id', 'INTEGER');
+          addColumn('presentation_name', 'TEXT');
+          addColumn('conversion_factor', 'INTEGER DEFAULT 1');
+          addColumn('stock_quantity', 'INTEGER');
+        }
+      });
+
+      db.run(`
+        UPDATE sale_items
+        SET
+          conversion_factor = COALESCE(conversion_factor, 1),
+          stock_quantity = COALESCE(stock_quantity, quantity),
+          presentation_name = COALESCE(presentation_name, 'Unidad')
+        WHERE stock_quantity IS NULL OR presentation_name IS NULL OR conversion_factor IS NULL
+      `);
+
+      db.run(`
+        UPDATE purchase_items
+        SET
+          conversion_factor = COALESCE(conversion_factor, 1),
+          stock_quantity = COALESCE(stock_quantity, quantity),
+          presentation_name = COALESCE(presentation_name, 'Unidad')
+        WHERE stock_quantity IS NULL OR presentation_name IS NULL OR conversion_factor IS NULL
+      `);
 
       // Ensure audit columns exist in cash_registers table (for existing databases)
       db.all('PRAGMA table_info(cash_registers)', (err, columns: any[]) => {
@@ -684,6 +805,7 @@ export function initializeDatabase(): Promise<void> {
         CREATE TABLE IF NOT EXISTS cash_movements (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           cash_register_id INTEGER NOT NULL,
+          cash_account_id INTEGER,
           movement_type TEXT NOT NULL,
           amount REAL NOT NULL,
           payment_method TEXT,
@@ -697,12 +819,108 @@ export function initializeDatabase(): Promise<void> {
         )
       `);
 
+      db.run(`
+        CREATE TABLE IF NOT EXISTS cash_accounts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          account_type TEXT NOT NULL DEFAULT 'both',
+          description TEXT,
+          is_active INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `, (accountErr) => {
+        if (accountErr) {
+          console.error('Error creating cash_accounts table:', accountErr);
+          return;
+        }
+
+        const defaultAccounts = [
+          ['Almuerzo', 'expense', 'Gastos de alimentacion del turno'],
+          ['Movilidad', 'expense', 'Gastos de movilidad o transporte'],
+          ['Compra menor', 'expense', 'Salida menor no registrada como compra a proveedor'],
+          ['Ingreso extra', 'income', 'Ingreso manual adicional a caja'],
+          ['Otros', 'both', 'Cuenta general para ingresos o salidas varias'],
+        ];
+
+        defaultAccounts.forEach(([name, accountType, description]) => {
+          db.run(
+            `INSERT OR IGNORE INTO cash_accounts (name, account_type, description, is_active)
+             VALUES (?, ?, ?, 1)`,
+            [name, accountType, description]
+          );
+        });
+      });
+
+      db.run(`
+        CREATE TABLE IF NOT EXISTS cash_denominations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          value REAL NOT NULL UNIQUE,
+          sort_order INTEGER DEFAULT 0,
+          is_active INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `, (denominationErr) => {
+        if (denominationErr) {
+          console.error('Error creating cash_denominations table:', denominationErr);
+          return;
+        }
+
+        const defaultDenominations = [
+          ['S/ 0.10', 0.10, 10],
+          ['S/ 0.20', 0.20, 20],
+          ['S/ 0.50', 0.50, 50],
+          ['S/ 1.00', 1.00, 100],
+          ['S/ 2.00', 2.00, 200],
+          ['S/ 5.00', 5.00, 500],
+          ['S/ 10.00', 10.00, 1000],
+          ['S/ 20.00', 20.00, 2000],
+          ['S/ 50.00', 50.00, 5000],
+          ['S/ 100.00', 100.00, 10000],
+          ['S/ 200.00', 200.00, 20000],
+        ];
+
+        defaultDenominations.forEach(([name, value, sortOrder]) => {
+          db.run(
+            `INSERT OR IGNORE INTO cash_denominations (name, value, sort_order, is_active)
+             VALUES (?, ?, ?, 1)`,
+            [name, value, sortOrder]
+          );
+        });
+      });
+
+      db.run(`
+        CREATE TABLE IF NOT EXISTS cash_register_cash_counts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          cash_register_id INTEGER NOT NULL,
+          denomination_id INTEGER,
+          denomination_name TEXT NOT NULL,
+          denomination_value REAL NOT NULL,
+          quantity INTEGER NOT NULL DEFAULT 0,
+          total REAL NOT NULL DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id),
+          FOREIGN KEY (denomination_id) REFERENCES cash_denominations(id)
+        )
+      `);
+
       db.all('PRAGMA table_info(cash_movements)', (err, columns: any[]) => {
         if (err) {
           console.error('Error checking cash_movements table structure:', err);
           return;
         }
         const colNames = (columns || []).map((c) => c.name);
+        if (!colNames.includes('cash_account_id')) {
+          db.run('ALTER TABLE cash_movements ADD COLUMN cash_account_id INTEGER', (alterErr) => {
+            if (alterErr) {
+              console.error('Error adding cash_account_id to cash_movements:', alterErr);
+            } else {
+              console.log('Column cash_account_id added to cash_movements');
+            }
+          });
+        }
         if (!colNames.includes('payment_method')) {
           db.run('ALTER TABLE cash_movements ADD COLUMN payment_method TEXT', (alterErr) => {
             if (alterErr) {

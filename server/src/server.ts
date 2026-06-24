@@ -25,6 +25,7 @@ import dashboardRoutes from './routes/dashboard';
 import cashRegisterRoutes from './routes/cash-registers';
 import paymentMethodRoutes from './routes/payment-methods';
 import companySettingsRoutes from './routes/company-settings';
+import productPresentationRoutes from './routes/product-presentations';
 
 dotenv.config();
 
@@ -59,6 +60,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/cash-registers', cashRegisterRoutes);
 app.use('/api/payment-methods', paymentMethodRoutes);
 app.use('/api/company-settings', companySettingsRoutes);
+app.use('/api/product-presentations', productPresentationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

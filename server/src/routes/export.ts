@@ -4,15 +4,53 @@ import XLSX from 'xlsx';
 import PDFDocument from 'pdfkit';
 import { db } from '../database/init';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { getNonAdminHistoryDays } from '../utils/companySettings';
 
 const router = express.Router();
+
+function getPeruDateString() {
+  const now = new Date();
+  const peruDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Lima' }));
+  return peruDate.toISOString().slice(0, 10);
+}
+
+function getPeruDateStringOffset(daysOffset: number) {
+  const [year, month, day] = getPeruDateString().split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + daysOffset);
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+async function getRestrictedDateRange(req: AuthRequest, startDate?: any, endDate?: any) {
+  const isAdmin = req.user?.role === 'admin';
+  const historyDays = await getNonAdminHistoryDays();
+  const minVisibleDate = getPeruDateStringOffset(-historyDays);
+  const maxVisibleDate = getPeruDateString();
+  const clampDate = (date: any, fallback: string) => {
+    if (!date) return fallback;
+    const value = String(date);
+    if (value < minVisibleDate) return minVisibleDate;
+    if (value > maxVisibleDate) return maxVisibleDate;
+    return value;
+  };
+
+  return {
+    isAdmin,
+    startDate: isAdmin ? startDate : clampDate(startDate, minVisibleDate),
+    endDate: isAdmin ? endDate : clampDate(endDate, maxVisibleDate),
+  };
+}
 
 // Export sales to Excel
 router.get('/sales/excel', authenticateToken, [
   query('start_date').optional(),
   query('end_date').optional(),
-], (req: AuthRequest, res) => {
+], async (req: AuthRequest, res) => {
   const { start_date, end_date } = req.query;
+  const { isAdmin, startDate: effectiveStartDate, endDate: effectiveEndDate } = await getRestrictedDateRange(req, start_date, end_date);
 
   let query = `
     SELECT s.sale_number, COALESCE(cr.accounting_date, DATE(s.created_at)) as accounting_date, s.created_at, c.name as customer_name,
@@ -27,14 +65,19 @@ router.get('/sales/excel', authenticateToken, [
   `;
   const params: any[] = [];
 
-  if (start_date) {
-    query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
-    params.push(start_date);
+  if (!isAdmin) {
+    query += ' AND s.user_id = ?';
+    params.push(req.user!.id);
   }
 
-  if (end_date) {
+  if (effectiveStartDate) {
+    query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
+    params.push(effectiveStartDate);
+  }
+
+  if (effectiveEndDate) {
     query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
-    params.push(end_date);
+    params.push(effectiveEndDate);
   }
 
   query += ' ORDER BY s.created_at DESC';
@@ -83,9 +126,18 @@ router.get('/cash-movements/excel', authenticateToken, [
   query('user_id').optional().isInt(),
   query('payment_method').optional().isString(),
   query('status').optional().isString(),
-], (req: AuthRequest, res) => {
+], async (req: AuthRequest, res) => {
   const { start_date, end_date, user_id, payment_method, status } = req.query;
   const isAdmin = req.user?.role === 'admin';
+  const historyDays = await getNonAdminHistoryDays();
+  const minVisibleDate = getPeruDateStringOffset(-historyDays);
+  const maxVisibleDate = getPeruDateString();
+  const effectiveStartDate = isAdmin
+    ? start_date
+    : (start_date && String(start_date) > minVisibleDate ? String(start_date) : minVisibleDate);
+  const effectiveEndDate = isAdmin
+    ? end_date
+    : (end_date && String(end_date) < maxVisibleDate ? String(end_date) : maxVisibleDate);
 
   let salesSql = `
     SELECT s.sale_number,
@@ -106,13 +158,13 @@ router.get('/cash-movements/excel', authenticateToken, [
   `;
   const salesParams: any[] = [];
 
-  if (start_date) {
+  if (effectiveStartDate) {
     salesSql += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
-    salesParams.push(start_date);
+    salesParams.push(effectiveStartDate);
   }
-  if (end_date) {
+  if (effectiveEndDate) {
     salesSql += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
-    salesParams.push(end_date);
+    salesParams.push(effectiveEndDate);
   }
   if (payment_method) {
     salesSql += ' AND s.payment_method = ?';
@@ -136,25 +188,27 @@ router.get('/cash-movements/excel', authenticateToken, [
     SELECT cm.description,
            cm.movement_type,
            cm.amount,
+           ca.name as cash_account_name,
            COALESCE(pm.name, cm.payment_method) as payment_method,
            cr.accounting_date,
            cm.created_at,
            COALESCE(u.full_name, u.username) as user_name
     FROM cash_movements cm
     INNER JOIN cash_registers cr ON cm.cash_register_id = cr.id
+    LEFT JOIN cash_accounts ca ON ca.id = cm.cash_account_id
     LEFT JOIN users u ON cm.user_id = u.id
     LEFT JOIN payment_methods pm ON pm.value = cm.payment_method
     WHERE 1=1
   `;
   const movementParams: any[] = [];
 
-  if (start_date) {
+  if (effectiveStartDate) {
     movementsSql += ' AND cr.accounting_date >= ?';
-    movementParams.push(start_date);
+    movementParams.push(effectiveStartDate);
   }
-  if (end_date) {
+  if (effectiveEndDate) {
     movementsSql += ' AND cr.accounting_date <= ?';
-    movementParams.push(end_date);
+    movementParams.push(effectiveEndDate);
   }
   if (payment_method) {
     movementsSql += ' AND cm.payment_method = ?';
@@ -203,11 +257,14 @@ router.get('/cash-movements/excel', authenticateToken, [
         if (type === 'purchase') return 'Compra';
         if (type === 'return') return 'Devolucion';
         if (type === 'sale') return 'Venta';
+        if (type === 'income') return 'Ingreso';
+        if (type === 'expense') return 'Salida';
         return type || '';
       };
 
       const movementRows = (movements || []).map((movement) => ({
         Descripcion: movement.description || '',
+        Cuenta: movement.cash_account_name || '',
         Tipo: movementTypeLabel(movement.movement_type),
         Metodo: movement.payment_method || '',
         Monto: Number(movement.amount) || 0,
@@ -293,8 +350,18 @@ router.get('/purchases/excel', authenticateToken, [
 router.get('/returns/excel', authenticateToken, [
   query('start_date').optional(),
   query('end_date').optional(),
-], (req: AuthRequest, res) => {
+], async (req: AuthRequest, res) => {
   const { start_date, end_date } = req.query;
+  const isAdmin = req.user?.role === 'admin';
+  const historyDays = await getNonAdminHistoryDays();
+  const minVisibleDate = getPeruDateStringOffset(-historyDays);
+  const maxVisibleDate = getPeruDateString();
+  const effectiveStartDate = isAdmin
+    ? start_date
+    : (start_date && String(start_date) > minVisibleDate ? String(start_date) : minVisibleDate);
+  const effectiveEndDate = isAdmin
+    ? end_date
+    : (end_date && String(end_date) < maxVisibleDate ? String(end_date) : maxVisibleDate);
   const params: any[] = [];
 
   let sql = `
@@ -307,14 +374,19 @@ router.get('/returns/excel', authenticateToken, [
     WHERE 1=1
   `;
 
-  if (start_date) {
-    sql += ' AND DATE(r.created_at) >= ?';
-    params.push(start_date);
+  if (!isAdmin) {
+    sql += ' AND r.user_id = ?';
+    params.push(req.user!.id);
   }
 
-  if (end_date) {
+  if (effectiveStartDate) {
+    sql += ' AND DATE(r.created_at) >= ?';
+    params.push(effectiveStartDate);
+  }
+
+  if (effectiveEndDate) {
     sql += ' AND DATE(r.created_at) <= ?';
-    params.push(end_date);
+    params.push(effectiveEndDate);
   }
 
   sql += ' ORDER BY r.created_at DESC';
@@ -341,6 +413,38 @@ router.get('/returns/excel', authenticateToken, [
       'devoluciones'
     );
   });
+});
+
+// Export categories to Excel
+router.get('/categories/excel', authenticateToken, (_req: AuthRequest, res) => {
+  db.all(
+    `SELECT c.id, c.name, c.description, c.created_at, c.updated_at,
+            COUNT(p.id) as product_count
+     FROM categories c
+     LEFT JOIN products p ON c.id = p.category_id AND p.is_active = 1
+     GROUP BY c.id
+     ORDER BY c.name`,
+    [],
+    (err, categories: any[]) => {
+      if (err) {
+        return res.status(500).json({ error: 'Database error' });
+      }
+
+      sendExcel(
+        res,
+        (categories || []).map((category) => ({
+          ID: category.id,
+          Nombre: category.name,
+          'Descripción': category.description || '',
+          'Productos activos': category.product_count || 0,
+          'Fecha creación': category.created_at || '',
+          'Fecha actualización': category.updated_at || '',
+        })),
+        'Categorias',
+        'categorias'
+      );
+    }
+  );
 });
 
 // Export products to Excel
@@ -439,8 +543,8 @@ router.get('/inventory/excel', authenticateToken, [
   }
 
   if (category) {
-    sql += ' AND c.name = ?';
-    params.push(category);
+    sql += " AND LOWER(COALESCE(c.name, '')) LIKE LOWER(?)";
+    params.push(`%${category}%`);
   }
 
   if (status === 'low') {
@@ -606,9 +710,25 @@ router.get('/alerts/expired/excel', authenticateToken, (req: AuthRequest, res) =
   );
 });
 
+function inventoryMovementTypeLabel(type: string) {
+  if (type === 'entry') return 'Entrada';
+  if (type === 'exit') return 'Salida';
+  if (type === 'adjustment_positive') return 'Ajuste positivo';
+  if (type === 'adjustment_negative' || type === 'adjustment') return 'Ajuste negativo';
+  return type || '';
+}
+
+function isInventoryEntryLike(type: string) {
+  return type === 'entry' || type === 'adjustment_positive';
+}
+
+function isInventoryExitLike(type: string) {
+  return type === 'exit' || type === 'adjustment_negative' || type === 'adjustment';
+}
+
 router.get('/inventory/movements/excel', authenticateToken, [
   query('product_id').optional().isInt(),
-  query('movement_type').optional().isIn(['entry', 'exit', 'adjustment']),
+  query('movement_type').optional().isIn(['entry', 'exit', 'adjustment', 'adjustment_positive', 'adjustment_negative']),
   query('start_date').optional(),
   query('end_date').optional(),
 ], (req: AuthRequest, res) => {
@@ -630,8 +750,12 @@ router.get('/inventory/movements/excel', authenticateToken, [
     params.push(product_id);
   }
   if (movement_type) {
-    sql += ' AND im.movement_type = ?';
-    params.push(movement_type);
+    if (movement_type === 'adjustment_negative' || movement_type === 'adjustment') {
+      sql += " AND im.movement_type IN ('adjustment_negative', 'adjustment')";
+    } else {
+      sql += ' AND im.movement_type = ?';
+      params.push(movement_type);
+    }
   }
   if (start_date) {
     sql += ' AND DATE(im.created_at) >= ?';
@@ -653,7 +777,7 @@ router.get('/inventory/movements/excel', authenticateToken, [
         Producto: row.product_name,
         Codigo: row.barcode || '',
         Categoria: row.category_name || '',
-        Tipo: row.movement_type === 'entry' ? 'Entrada' : row.movement_type === 'exit' ? 'Salida' : 'Ajuste',
+        Tipo: inventoryMovementTypeLabel(row.movement_type),
         Cantidad: Number(row.quantity) || 0,
         Referencia: row.reference_number || '',
         Usuario: row.user_name || '',
@@ -688,13 +812,12 @@ router.get('/inventory/kardex/:productId/excel', authenticateToken, [
       let computed = 0;
       (rows || []).forEach((row) => {
         const quantity = Number(row.quantity) || 0;
-        if (row.movement_type === 'entry') computed += quantity;
-        else if (row.movement_type === 'exit') computed -= quantity;
-        else computed -= quantity;
+        if (isInventoryEntryLike(row.movement_type)) computed += quantity;
+        else if (isInventoryExitLike(row.movement_type)) computed -= quantity;
       });
 
       const currentStock = rows?.[0] ? Number(rows[0].current_stock) || 0 : 0;
-      const hasAdjustment = (rows || []).some((row) => row.movement_type === 'adjustment');
+      const hasAdjustment = (rows || []).some((row) => row.movement_type === 'adjustment' || row.movement_type === 'adjustment_positive' || row.movement_type === 'adjustment_negative');
       let balance = hasAdjustment ? 0 : currentStock - computed;
       const startDate = start_date ? String(start_date) : null;
       const endDate = end_date ? String(end_date) : null;
@@ -705,13 +828,10 @@ router.get('/inventory/kardex/:productId/excel', authenticateToken, [
         let entry = 0;
         let exit = 0;
 
-        if (row.movement_type === 'entry') {
+        if (isInventoryEntryLike(row.movement_type)) {
           entry = quantity;
           balance += quantity;
-        } else if (row.movement_type === 'exit') {
-          exit = quantity;
-          balance -= quantity;
-        } else {
+        } else if (isInventoryExitLike(row.movement_type)) {
           exit = quantity;
           balance -= quantity;
         }
@@ -721,7 +841,7 @@ router.get('/inventory/kardex/:productId/excel', authenticateToken, [
 
         excelRows.push({
           Fecha: row.created_at,
-          Tipo: row.movement_type === 'entry' ? 'Entrada' : row.movement_type === 'exit' ? 'Salida' : 'Ajuste',
+          Tipo: inventoryMovementTypeLabel(row.movement_type),
           Referencia: row.reference_number || '',
           Entrada: entry,
           Salida: exit,
@@ -771,8 +891,9 @@ router.get('/products-sold-by-user/excel', authenticateToken, [
   query('start_date').optional(),
   query('end_date').optional(),
   query('user_id').optional().isInt(),
-], (req: AuthRequest, res) => {
+], async (req: AuthRequest, res) => {
   const { start_date, end_date, user_id } = req.query;
+  const { isAdmin, startDate: effectiveStartDate, endDate: effectiveEndDate } = await getRestrictedDateRange(req, start_date, end_date);
   let sql = `
     SELECT COALESCE(cr.accounting_date, DATE(s.created_at)) as accounting_date, s.created_at, s.sale_number, u.full_name as user_name, p.name as product_name,
            p.barcode, si.quantity, si.unit_price, si.discount, si.subtotal,
@@ -787,15 +908,18 @@ router.get('/products-sold-by-user/excel', authenticateToken, [
   `;
   const params: any[] = [];
 
-  if (start_date) {
+  if (effectiveStartDate) {
     sql += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
-    params.push(start_date);
+    params.push(effectiveStartDate);
   }
-  if (end_date) {
+  if (effectiveEndDate) {
     sql += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
-    params.push(end_date);
+    params.push(effectiveEndDate);
   }
-  if (user_id) {
+  if (!isAdmin) {
+    sql += ' AND u.id = ?';
+    params.push(req.user!.id);
+  } else if (user_id) {
     sql += ' AND u.id = ?';
     params.push(user_id);
   }
