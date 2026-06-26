@@ -3,7 +3,7 @@ import { body, validationResult, query } from 'express-validator';
 import { db } from '../database/init';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { logAction } from '../middleware/audit';
-import { getNonAdminHistoryDays } from '../utils/companySettings';
+import { getLocalDateTime } from '../utils/dateTime';
 
 const router = express.Router();
 
@@ -36,10 +36,10 @@ function validatePaymentMethod(paymentMethod: string, paymentReference?: string)
   });
 }
 
-function getOpenCashRegister(userId: number): Promise<{ id: number }> {
+function getOpenCashRegister(userId: number): Promise<{ id: number; accounting_date: string }> {
   return new Promise((resolve, reject) => {
     db.get(
-      `SELECT id 
+      `SELECT id, accounting_date
        FROM cash_registers 
        WHERE user_id = ? AND status = 'open' AND closed_at IS NULL
        ORDER BY opened_at DESC
@@ -55,19 +55,10 @@ function getOpenCashRegister(userId: number): Promise<{ id: number }> {
             message: 'Debes abrir una caja antes de registrar ventas.',
           } as CashRegisterError);
         }
-        resolve(row as { id: number });
+        resolve(row as { id: number; accounting_date: string });
       }
     );
   });
-}
-
-function getPeruDateStringOffset(daysOffset: number): string {
-  const peruNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Lima' }));
-  peruNow.setDate(peruNow.getDate() + daysOffset);
-  const y = peruNow.getFullYear();
-  const m = String(peruNow.getMonth() + 1).padStart(2, '0');
-  const d = String(peruNow.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
 }
 
 // Get all sales
@@ -212,10 +203,17 @@ router.get('/', authenticateToken, [
 
 // Get sales available for return (with items not fully returned)
 router.get('/available-for-return', authenticateToken, async (req: AuthRequest, res) => {
-  const isAdmin = req.user?.role === 'admin';
-  const historyDays = await getNonAdminHistoryDays();
-  const minVisibleDate = getPeruDateStringOffset(-historyDays);
-  const maxVisibleDate = getPeruDateStringOffset(0);
+  let openCash: { id: number; accounting_date: string };
+
+  try {
+    openCash = await getOpenCashRegister(req.user!.id);
+  } catch (error) {
+    const cashError = error as CashRegisterError;
+    if (cashError.code === 'NO_CASH_REGISTER') {
+      return res.json({ sales: [] });
+    }
+    return res.status(500).json({ error: 'Database error' });
+  }
 
   let sql = `
      SELECT DISTINCT s.*, COALESCE(pm.name, s.payment_method) as payment_method_name, c.name as customer_name, u.username as user_name,
@@ -232,13 +230,11 @@ router.get('/available-for-return', authenticateToken, async (req: AuthRequest, 
        GROUP BY sale_item_id
      ) ri ON si.id = ri.sale_item_id
      WHERE COALESCE(ri.returned_quantity, 0) < si.quantity
+       AND s.user_id = ?
+       AND s.cash_register_id = ?
+       AND COALESCE(cr.accounting_date, DATE(s.created_at)) = ?
   `;
-  const params: any[] = [];
-
-  if (!isAdmin) {
-    sql += ' AND s.user_id = ? AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ? AND COALESCE(cr.accounting_date, DATE(s.created_at)) <= ?';
-    params.push(req.user!.id, minVisibleDate, maxVisibleDate);
-  }
+  const params: any[] = [req.user!.id, openCash.id, openCash.accounting_date];
 
   sql += `
      ORDER BY s.created_at DESC
@@ -419,29 +415,13 @@ router.post('/', authenticateToken, [
     .then((cashRegister) => {
       const finalAmount = totalAmount - discount + tax_amount;
 
-      // Get current date/time in Peru timezone (UTC-5)
-      const now = new Date();
-      // Convert to Peru timezone
-      const peruTimeString = now.toLocaleString('en-US', { 
-        timeZone: 'America/Lima',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      });
-      // Format: YYYY-MM-DD HH:MM:SS
-      const [datePart, timePart] = peruTimeString.split(', ');
-      const [month, day, year] = datePart.split('/');
-      const peruDateTime = `${year}-${month}-${day} ${timePart}`;
+      const createdAt = getLocalDateTime();
 
       // Create sale
       db.run(
         `INSERT INTO sales (sale_number, customer_id, user_id, cash_register_id, total_amount, discount, tax_amount, final_amount, payment_method, payment_reference, notes, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [saleNumber, customer_id || null, req.user!.id, cashRegister.id, totalAmount, discount, tax_amount, finalAmount, payment_method, payment_reference?.trim() || null, notes || null, peruDateTime],
+        [saleNumber, customer_id || null, req.user!.id, cashRegister.id, totalAmount, discount, tax_amount, finalAmount, payment_method, payment_reference?.trim() || null, notes || null, createdAt],
         function(err) {
           if (err) {
             return res.status(500).json({ error: 'Database error' });
@@ -465,16 +445,16 @@ router.post('/', authenticateToken, [
 
                 // Update inventory
                 db.run(
-                  'UPDATE inventory SET quantity = quantity - ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-                  [item.stock_quantity, item.product_id],
+                  'UPDATE inventory SET quantity = quantity - ?, last_updated = ? WHERE product_id = ?',
+                  [item.stock_quantity, createdAt, item.product_id],
                   () => {}
                 );
 
                 // Record inventory movement
                 db.run(
-                  `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id)
-                   VALUES (?, 'exit', ?, ?, ?)`,
-                  [item.product_id, item.stock_quantity, saleNumber, req.user!.id],
+                  `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, created_at)
+                   VALUES (?, 'exit', ?, ?, ?, ?)`,
+                  [item.product_id, item.stock_quantity, saleNumber, req.user!.id, createdAt],
                   () => {}
                 );
 

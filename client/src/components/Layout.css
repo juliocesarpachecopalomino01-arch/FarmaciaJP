@@ -27,7 +27,7 @@
 }
 
 .sidebar-header {
-  padding: 1.75rem 1.5rem;
+  padding: 1.55rem 1rem 1.4rem;
   border-bottom: 1px solid var(--border-light);
   display: flex;
   justify-content: space-between;
@@ -35,14 +35,44 @@
   background: linear-gradient(135deg, rgba(37, 99, 235, 0.05) 0%, rgba(30, 64, 175, 0.02) 100%);
 }
 
-.sidebar-header h1 {
-  font-size: 1.75rem;
-  font-weight: 800;
-  background: var(--gradient-primary);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.5px;
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.sidebar-brand-mark {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 52%, #10b981 100%);
+  color: white;
+  font-size: 1rem;
+  font-weight: 900;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
+}
+
+.sidebar-brand h1 {
+  display: block;
+  min-width: 0;
+  max-width: 10.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1.1rem !important;
+  font-weight: 900 !important;
+  background: var(--gradient-primary) !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  background-clip: text !important;
+  color: var(--primary-dark) !important;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .global-search-trigger {

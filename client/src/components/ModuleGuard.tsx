@@ -4,6 +4,7 @@ import { useLocation, Navigate } from 'react-router-dom';
 const PATH_TO_MODULE: Record<string, string> = {
   '/': 'dashboard',
   '/products': 'products',
+  '/presentation-types': 'presentation-types',
   '/categories': 'categories',
   '/payment-methods': 'payment-methods',
   '/company-settings': 'company-settings',
@@ -11,6 +12,7 @@ const PATH_TO_MODULE: Record<string, string> = {
   '/sales': 'sales',
   '/cash-register': 'cash-register',
   '/cash-movements': 'cash-movements',
+  '/cash-reports': 'cash-reports',
   '/product-movements': 'product-movements',
   '/alerts': 'alerts',
   '/customers': 'customers',

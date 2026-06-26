@@ -5,12 +5,40 @@ export interface InventoryItem {
   product_id: number;
   product_name: string;
   barcode?: string;
+  laboratory?: string;
   category_name?: string;
   quantity: number;
   min_stock: number;
   max_stock: number;
   location?: string;
   unit_price: number;
+}
+
+export type InventoryQuickFilter = 'all' | 'low' | 'high' | 'value';
+
+export interface InventoryFilters {
+  search?: string;
+  category?: string;
+  status?: string;
+  quick_filter?: Exclude<InventoryQuickFilter, 'all'>;
+  page?: number;
+  limit?: number;
+}
+
+export interface InventoryResponse {
+  inventory: InventoryItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+  stats: {
+    total: number;
+    lowStock: number;
+    highStock: number;
+    inventoryValue: number;
+  };
 }
 
 export type InventoryMovementType = 'entry' | 'exit' | 'adjustment' | 'adjustment_positive' | 'adjustment_negative';
@@ -68,8 +96,15 @@ export interface KardexResponse {
 
 export const inventoryApi = {
   getAll: async (lowStock?: boolean): Promise<InventoryItem[]> => {
-    const response = await api.get<InventoryItem[]>('/inventory', {
-      params: { low_stock: lowStock },
+    const response = await api.get<InventoryResponse>('/inventory', {
+      params: { low_stock: lowStock, all: true },
+    });
+    return response.data.inventory;
+  },
+
+  getPaged: async (filters?: InventoryFilters): Promise<InventoryResponse> => {
+    const response = await api.get<InventoryResponse>('/inventory', {
+      params: filters,
     });
     return response.data;
   },

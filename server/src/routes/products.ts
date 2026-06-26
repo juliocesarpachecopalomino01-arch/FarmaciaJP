@@ -72,11 +72,14 @@ router.get('/', [
   query('search').optional(),
   query('category_id').optional().isInt(),
   query('is_active').optional().isInt(),
+  query('quick_filter').optional().isIn(['active', 'low_stock', 'bonus']),
   query('page').optional().isInt(),
   query('limit').optional().isInt(),
 ], (req, res) => {
-  const { search, category_id, is_active, page = 1, limit = 50 } = req.query;
-  const offset = (Number(page) - 1) * Number(limit);
+  const { search, category_id, is_active, quick_filter, page = 1, limit = 50 } = req.query;
+  const pageNumber = Math.max(Number(page) || 1, 1);
+  const pageLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const offset = (pageNumber - 1) * pageLimit;
 
   let query = `
     SELECT p.*, c.name as category_name, 
@@ -115,8 +118,22 @@ router.get('/', [
     params.push(category_id);
   }
 
+  if (quick_filter === 'active') {
+    query += ' AND COALESCE(p.is_active, 1) = 1';
+  }
+
+  if (quick_filter === 'low_stock') {
+    query += ` AND COALESCE((SELECT min_stock FROM inventory WHERE product_id = p.id LIMIT 1), 0) > 0
+      AND COALESCE((SELECT SUM(quantity) FROM inventory WHERE product_id = p.id), 0)
+        <= COALESCE((SELECT min_stock FROM inventory WHERE product_id = p.id LIMIT 1), 0)`;
+  }
+
+  if (quick_filter === 'bonus') {
+    query += ' AND COALESCE(p.has_sales_bonus, 0) = 1 AND COALESCE(p.sales_bonus_per_unit, 0) > 0';
+  }
+
   query += ' ORDER BY p.name LIMIT ? OFFSET ?';
-  params.push(Number(limit), offset);
+  params.push(pageLimit, offset);
 
   db.all(query, params, (err, products) => {
     if (err) {
@@ -153,20 +170,98 @@ router.get('/', [
       countParams.push(category_id);
     }
 
+    if (quick_filter === 'active') {
+      countQuery += ' AND COALESCE(is_active, 1) = 1';
+    }
+
+    if (quick_filter === 'low_stock') {
+      countQuery += ` AND COALESCE((SELECT min_stock FROM inventory WHERE product_id = products.id LIMIT 1), 0) > 0
+        AND COALESCE((SELECT SUM(quantity) FROM inventory WHERE product_id = products.id), 0)
+          <= COALESCE((SELECT min_stock FROM inventory WHERE product_id = products.id LIMIT 1), 0)`;
+    }
+
+    if (quick_filter === 'bonus') {
+      countQuery += ' AND COALESCE(has_sales_bonus, 0) = 1 AND COALESCE(sales_bonus_per_unit, 0) > 0';
+    }
+
     db.get(countQuery, countParams, (err, result: any) => {
       if (err) {
         return res.status(500).json({ error: 'Database error' });
       }
 
-      attachPresentations(products as any[], (items) => {
-        res.json({
-          products: items,
-          pagination: {
-            page: Number(page),
-            limit: Number(limit),
-            total: result.total,
-            totalPages: Math.ceil(result.total / Number(limit)),
-          },
+      let statsQuery = `
+        SELECT
+          COUNT(*) as total,
+          COALESCE(SUM(CASE WHEN COALESCE(is_active, 1) = 1 THEN 1 ELSE 0 END), 0) as active,
+          COALESCE(SUM(CASE WHEN COALESCE(is_active, 1) = 0 THEN 1 ELSE 0 END), 0) as inactive,
+          COALESCE(SUM(CASE
+            WHEN COALESCE((SELECT min_stock FROM inventory WHERE product_id = products.id LIMIT 1), 0) > 0
+             AND COALESCE((SELECT SUM(quantity) FROM inventory WHERE product_id = products.id), 0)
+                <= COALESCE((SELECT min_stock FROM inventory WHERE product_id = products.id LIMIT 1), 0)
+            THEN 1 ELSE 0 END), 0) as lowStock,
+          COALESCE(SUM(CASE
+            WHEN expiration_date IS NOT NULL
+             AND date(expiration_date) >= date('now', 'localtime')
+             AND date(expiration_date) <= date('now', 'localtime', '+30 days')
+            THEN 1 ELSE 0 END), 0) as expiring,
+          COALESCE(SUM(CASE
+            WHEN COALESCE(has_sales_bonus, 0) = 1
+             AND COALESCE(sales_bonus_per_unit, 0) > 0
+            THEN 1 ELSE 0 END), 0) as withBonus
+        FROM products
+        WHERE 1=1
+      `;
+      const statsParams: any[] = [];
+
+      if (is_active !== undefined && is_active !== '') {
+        statsQuery += ' AND is_active = ?';
+        statsParams.push(is_active);
+      }
+
+      if (search) {
+        statsQuery += ` AND (
+          name LIKE ? OR barcode LIKE ? OR description LIKE ?
+          OR sanitary_registration LIKE ? OR lot_number LIKE ?
+          OR presentation LIKE ? OR laboratory LIKE ?
+          OR EXISTS (
+            SELECT 1
+            FROM product_presentations pp
+            WHERE pp.product_id = products.id
+              AND (pp.name LIKE ? OR pp.barcode LIKE ?)
+          )
+        )`;
+        const searchTerm = `%${search}%`;
+        statsParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      }
+
+      if (category_id) {
+        statsQuery += ' AND category_id = ?';
+        statsParams.push(category_id);
+      }
+
+      db.get(statsQuery, statsParams, (statsErr, stats: any) => {
+        if (statsErr) {
+          return res.status(500).json({ error: 'Database error' });
+        }
+
+        attachPresentations(products as any[], (items) => {
+          res.json({
+            products: items,
+            pagination: {
+              page: pageNumber,
+              limit: pageLimit,
+              total: result.total,
+              totalPages: Math.ceil(result.total / pageLimit),
+            },
+            stats: {
+              total: Number(stats?.total || 0),
+              active: Number(stats?.active || 0),
+              inactive: Number(stats?.inactive || 0),
+              lowStock: Number(stats?.lowStock || 0),
+              expiring: Number(stats?.expiring || 0),
+              withBonus: Number(stats?.withBonus || 0),
+            },
+          });
         });
       });
     });

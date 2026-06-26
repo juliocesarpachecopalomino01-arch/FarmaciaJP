@@ -132,7 +132,20 @@ function ProductSearchFilter({
 
 function formatDate(value?: string) {
   if (!value) return '-';
-  return new Date(value).toLocaleString('es-PE');
+
+  const raw = String(value).trim();
+  const dateTimeMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::\d{2})?)?/);
+
+  if (dateTimeMatch) {
+    const [, year, month, day, hour = '00', minute = '00'] = dateTimeMatch;
+    return `${day}/${month}/${year} ${hour}:${minute}`;
+  }
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+
+  const twoDigits = (number: number) => String(number).padStart(2, '0');
+  return `${twoDigits(date.getDate())}/${twoDigits(date.getMonth() + 1)}/${date.getFullYear()} ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
 }
 
 function formatNumber(value: number | string | undefined) {

@@ -627,6 +627,7 @@ router.get('/alerts/low-stock/excel', authenticateToken, (req: AuthRequest, res)
         (rows || []).map((row) => ({
           Producto: row.name,
           Codigo: row.barcode || '',
+          Laboratorio: row.laboratory || '',
           Categoria: row.category_name || '',
           Stock: Number(row.quantity) || 0,
           Minimo: Number(row.min_stock) || 0,
@@ -665,6 +666,7 @@ router.get('/alerts/expiring-soon/excel', authenticateToken, [
         (rows || []).map((row) => ({
           Producto: row.name,
           Codigo: row.barcode || '',
+          Laboratorio: row.laboratory || '',
           Categoria: row.category_name || '',
           'Fecha de vencimiento': row.expiration_date || '',
           'Dias restantes': Math.floor(Number(row.days_until_expiration) || 0),
@@ -698,6 +700,7 @@ router.get('/alerts/expired/excel', authenticateToken, (req: AuthRequest, res) =
         (rows || []).map((row) => ({
           Producto: row.name,
           Codigo: row.barcode || '',
+          Laboratorio: row.laboratory || '',
           Categoria: row.category_name || '',
           'Fecha de vencimiento': row.expiration_date || '',
           'Dias vencido': Math.floor(Number(row.days_expired) || 0),

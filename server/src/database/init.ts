@@ -26,6 +26,304 @@ export const db = new sqlite3.Database(DB_PATH, (err) => {
   }
 });
 
+function runDb(sql: string, params: any[] = []): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function allDb<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve((rows || []) as T[]);
+    });
+  });
+}
+
+async function ensureColumn(table: string, column: string, definition: string): Promise<void> {
+  const columns = await allDb<{ name: string }>(`PRAGMA table_info(${table})`);
+  if (columns.some((col) => col.name === column)) return;
+  await runDb(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  console.log(`Column ${column} added to ${table}`);
+}
+
+async function ensureColumns(table: string, columns: Array<[string, string]>): Promise<void> {
+  for (const [column, definition] of columns) {
+    await ensureColumn(table, column, definition);
+  }
+}
+
+async function runCriticalMigrations(): Promise<void> {
+  await ensureColumns('users', [
+    ['worker_id', 'INTEGER'],
+    ['profile_id', 'INTEGER']
+  ]);
+
+  await ensureColumns('company_settings', [
+    ['trade_name', 'TEXT'],
+    ['ruc', 'TEXT'],
+    ['address', 'TEXT'],
+    ['phone', 'TEXT'],
+    ['email', 'TEXT'],
+    ['website', 'TEXT'],
+    ['logo_data_url', 'TEXT'],
+    ['receipt_title', "TEXT DEFAULT 'COMPROBANTE DE VENTA'"],
+    ['receipt_footer', "TEXT DEFAULT 'Gracias por su compra'"],
+    ['receipt_width_mm', 'INTEGER DEFAULT 80'],
+    ['show_logo', 'INTEGER DEFAULT 1'],
+    ['show_qr', 'INTEGER DEFAULT 1'],
+    ['non_admin_history_days', 'INTEGER DEFAULT 5'],
+    ['cash_reopen_password', "TEXT DEFAULT 'admin123'"],
+    ['return_password', "TEXT DEFAULT 'd3v0luc10n$2026$*'"]
+  ]);
+
+  await ensureColumns('products', [
+    ['expiration_date', 'DATE'],
+    ['has_sales_bonus', 'INTEGER DEFAULT 0'],
+    ['sales_bonus_per_unit', 'REAL DEFAULT 0'],
+    ['sanitary_registration', 'TEXT'],
+    ['lot_number', 'TEXT'],
+    ['presentation', 'TEXT'],
+    ['laboratory', 'TEXT']
+  ]);
+
+  await runDb(`
+    CREATE TABLE IF NOT EXISTS presentation_types (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      description TEXT,
+      is_active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await runDb(`
+    CREATE TABLE IF NOT EXISTS product_presentations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL,
+      presentation_type_id INTEGER,
+      name TEXT NOT NULL,
+      barcode TEXT,
+      conversion_factor INTEGER NOT NULL DEFAULT 1,
+      unit_price REAL NOT NULL DEFAULT 0,
+      cost_price REAL,
+      is_default INTEGER DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+      FOREIGN KEY (presentation_type_id) REFERENCES presentation_types(id)
+    )
+  `);
+
+  await ensureColumns('product_presentations', [
+    ['presentation_type_id', 'INTEGER'],
+    ['name', "TEXT DEFAULT 'Unidad'"],
+    ['barcode', 'TEXT'],
+    ['conversion_factor', 'INTEGER DEFAULT 1'],
+    ['unit_price', 'REAL DEFAULT 0'],
+    ['cost_price', 'REAL'],
+    ['is_default', 'INTEGER DEFAULT 0'],
+    ['is_active', 'INTEGER DEFAULT 1'],
+    ['created_at', 'DATETIME'],
+    ['updated_at', 'DATETIME']
+  ]);
+
+  await runDb(`
+    INSERT OR IGNORE INTO presentation_types (name, description)
+    VALUES
+      ('Unidad', 'Venta por unidad base'),
+      ('Tableta', 'Venta por tableta'),
+      ('Blister', 'Venta por blister'),
+      ('Frasco', 'Venta por frasco'),
+      ('Caja', 'Venta por caja'),
+      ('Ampolla', 'Venta por ampolla'),
+      ('Sobre', 'Venta por sobre')
+  `);
+
+  await ensureColumns('sale_items', [
+    ['sales_bonus_per_unit', 'REAL DEFAULT 0'],
+    ['sales_bonus_total', 'REAL DEFAULT 0'],
+    ['cost_price', 'REAL'],
+    ['presentation_id', 'INTEGER'],
+    ['presentation_name', 'TEXT'],
+    ['conversion_factor', 'INTEGER DEFAULT 1'],
+    ['stock_quantity', 'INTEGER']
+  ]);
+
+  await ensureColumns('purchase_items', [
+    ['presentation_id', 'INTEGER'],
+    ['presentation_name', 'TEXT'],
+    ['conversion_factor', 'INTEGER DEFAULT 1'],
+    ['stock_quantity', 'INTEGER']
+  ]);
+
+  await runDb(`
+    INSERT INTO product_presentations (product_id, presentation_type_id, name, barcode, conversion_factor, unit_price, cost_price, is_default, is_active)
+    SELECT
+      p.id,
+      (SELECT id FROM presentation_types WHERE name IN ('Unidad') LIMIT 1),
+      COALESCE(NULLIF(p.presentation, ''), 'Unidad'),
+      p.barcode,
+      1,
+      COALESCE(p.unit_price, 0),
+      p.cost_price,
+      1,
+      1
+    FROM products p
+    WHERE NOT EXISTS (
+      SELECT 1 FROM product_presentations pp WHERE pp.product_id = p.id
+    )
+  `);
+
+  await runDb(`
+    UPDATE sale_items
+    SET
+      conversion_factor = COALESCE(conversion_factor, 1),
+      stock_quantity = COALESCE(stock_quantity, quantity),
+      presentation_name = COALESCE(presentation_name, 'Unidad')
+    WHERE stock_quantity IS NULL OR presentation_name IS NULL OR conversion_factor IS NULL
+  `);
+
+  await runDb(`
+    UPDATE purchase_items
+    SET
+      conversion_factor = COALESCE(conversion_factor, 1),
+      stock_quantity = COALESCE(stock_quantity, quantity),
+      presentation_name = COALESCE(presentation_name, 'Unidad')
+    WHERE stock_quantity IS NULL OR presentation_name IS NULL OR conversion_factor IS NULL
+  `);
+
+  await ensureColumns('cash_registers', [
+    ['previous_closed_at', 'DATETIME'],
+    ['previous_closing_balance', 'REAL'],
+    ['reopened_at', 'DATETIME'],
+    ['reopened_by_user_id', 'INTEGER'],
+    ['reopen_notes', 'TEXT'],
+    ['cash_count_total', 'REAL DEFAULT 0'],
+    ['cash_count_difference', 'REAL DEFAULT 0']
+  ]);
+
+  await ensureColumns('returns', [
+    ['cash_register_id', 'INTEGER']
+  ]);
+
+  await runDb(`
+    CREATE TABLE IF NOT EXISTS cash_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      account_type TEXT NOT NULL DEFAULT 'both',
+      description TEXT,
+      is_active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await ensureColumns('cash_accounts', [
+    ['account_type', "TEXT DEFAULT 'both'"],
+    ['description', 'TEXT'],
+    ['is_active', 'INTEGER DEFAULT 1'],
+    ['created_at', 'DATETIME'],
+    ['updated_at', 'DATETIME']
+  ]);
+
+  await runDb(`
+    INSERT OR IGNORE INTO cash_accounts (id, name, account_type, description, is_active)
+    VALUES
+      (1, 'Otros', 'both', 'Cuenta general para ingresos o salidas varias', 1),
+      (2, 'Almuerzo', 'expense', 'Gastos de alimentacion del turno', 1),
+      (3, 'Movilidad', 'expense', 'Gastos de movilidad o transporte', 1),
+      (4, 'Ingreso extra', 'income', 'Ingreso manual adicional a caja', 1),
+      (5, 'Compra menor', 'expense', 'Salida menor no registrada como compra a proveedor', 1)
+  `);
+
+  await runDb(`
+    CREATE TABLE IF NOT EXISTS cash_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cash_register_id INTEGER NOT NULL,
+      movement_type TEXT NOT NULL,
+      amount REAL NOT NULL,
+      payment_method TEXT DEFAULT 'cash',
+      cash_account_id INTEGER,
+      reference_type TEXT,
+      reference_id INTEGER,
+      description TEXT,
+      user_id INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id),
+      FOREIGN KEY (cash_account_id) REFERENCES cash_accounts(id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
+
+  await ensureColumns('cash_movements', [
+    ['payment_method', "TEXT DEFAULT 'cash'"],
+    ['cash_account_id', 'INTEGER']
+  ]);
+
+  await runDb(`
+    CREATE TABLE IF NOT EXISTS cash_denominations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      value REAL NOT NULL UNIQUE,
+      sort_order INTEGER DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await ensureColumns('cash_denominations', [
+    ['name', 'TEXT'],
+    ['value', 'REAL'],
+    ['sort_order', 'INTEGER DEFAULT 0'],
+    ['is_active', 'INTEGER DEFAULT 1'],
+    ['created_at', 'DATETIME'],
+    ['updated_at', 'DATETIME']
+  ]);
+
+  await runDb(`
+    INSERT OR IGNORE INTO cash_denominations (id, name, value, sort_order, is_active)
+    VALUES
+      (1, 'S/ 0.10', 0.10, 1, 1),
+      (2, 'S/ 0.20', 0.20, 2, 1),
+      (3, 'S/ 0.50', 0.50, 3, 1),
+      (4, 'S/ 1.00', 1.00, 4, 1),
+      (5, 'S/ 2.00', 2.00, 5, 1),
+      (6, 'S/ 5.00', 5.00, 6, 1),
+      (7, 'S/ 10.00', 10.00, 7, 1),
+      (8, 'S/ 20.00', 20.00, 8, 1),
+      (9, 'S/ 50.00', 50.00, 9, 1),
+      (10, 'S/ 100.00', 100.00, 10, 1),
+      (11, 'S/ 200.00', 200.00, 11, 1)
+  `);
+
+  await runDb(`
+    CREATE TABLE IF NOT EXISTS cash_register_cash_counts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cash_register_id INTEGER NOT NULL,
+      denomination_id INTEGER NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 0,
+      amount REAL NOT NULL DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id),
+      FOREIGN KEY (denomination_id) REFERENCES cash_denominations(id)
+    )
+  `);
+
+  await ensureColumns('purchases', [
+    ['cash_register_id', 'INTEGER'],
+    ['afecta_caja', 'INTEGER DEFAULT 0'],
+    ['cash_payment_method', 'TEXT']
+  ]);
+}
+
 export function initializeDatabase(): Promise<void> {
   return new Promise(async (resolve, reject) => {
     // Ensure database directory exists
@@ -539,7 +837,7 @@ export function initializeDatabase(): Promise<void> {
           );
           const modules = [
             'dashboard', 'products', 'categories', 'payment-methods', 'company-settings', 'inventory',
-            'sales', 'cash-register', 'cash-movements', 'product-movements', 'alerts', 'customers',
+            'sales', 'cash-register', 'cash-movements', 'cash-reports', 'product-movements', 'alerts', 'customers',
             'reports', 'returns', 'suppliers', 'purchases', 'users', 'scan-qr',
           ];
           modules.forEach((moduleKey) => {
@@ -687,7 +985,11 @@ export function initializeDatabase(): Promise<void> {
           FROM product_presentations pp
           WHERE pp.product_id = p.id
         )
-      `);
+      `, (err) => {
+        if (err) {
+          console.error('Error backfilling product presentations before critical migration:', err);
+        }
+      });
 
       db.all('PRAGMA table_info(sale_items)', (err, columns: any[]) => {
         if (err) {
@@ -745,7 +1047,11 @@ export function initializeDatabase(): Promise<void> {
           stock_quantity = COALESCE(stock_quantity, quantity),
           presentation_name = COALESCE(presentation_name, 'Unidad')
         WHERE stock_quantity IS NULL OR presentation_name IS NULL OR conversion_factor IS NULL
-      `);
+      `, (err) => {
+        if (err) {
+          console.error('Error backfilling sale item presentations before critical migration:', err);
+        }
+      });
 
       db.run(`
         UPDATE purchase_items
@@ -754,7 +1060,11 @@ export function initializeDatabase(): Promise<void> {
           stock_quantity = COALESCE(stock_quantity, quantity),
           presentation_name = COALESCE(presentation_name, 'Unidad')
         WHERE stock_quantity IS NULL OR presentation_name IS NULL OR conversion_factor IS NULL
-      `);
+      `, (err) => {
+        if (err) {
+          console.error('Error backfilling purchase item presentations before critical migration:', err);
+        }
+      });
 
       // Ensure audit columns exist in cash_registers table (for existing databases)
       db.all('PRAGMA table_info(cash_registers)', (err, columns: any[]) => {
@@ -1047,7 +1357,12 @@ export function initializeDatabase(): Promise<void> {
         VALUES (1, 'FARMACIA', 'Sistema de Farmacia', 'COMPROBANTE DE VENTA', 'Gracias por su compra', 80, 1, 1)
       `);
 
-      resolve();
+      runCriticalMigrations()
+        .then(() => resolve())
+        .catch((migrationErr) => {
+          console.error('Error running critical database migrations:', migrationErr);
+          reject(migrationErr);
+        });
     });
   });
 }

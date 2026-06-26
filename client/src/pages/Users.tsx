@@ -52,6 +52,7 @@ export default function Users() {
     profile_id: '',
   });
   const [editUserForm, setEditUserForm] = useState({ worker_id: '', profile_id: '', is_active: true });
+  const [passwordForm, setPasswordForm] = useState({ current_password: '', new_password: '', confirm_password: '' });
   const [workerForm, setWorkerForm] = useState({ ...emptyWorker });
   const [profileForm, setProfileForm] = useState({ ...emptyProfile });
 
@@ -93,6 +94,18 @@ export default function Users() {
         setEditingUser(null);
       },
       onError: (error: any) => alert(error?.response?.data?.error || 'No se pudo actualizar el usuario'),
+    }
+  );
+
+  const changePasswordMutation = useMutation(
+    (payload: { id: number; data: { current_password?: string; new_password: string } }) =>
+      usersApi.changePassword(payload.id, payload.data),
+    {
+      onSuccess: () => {
+        setPasswordForm({ current_password: '', new_password: '', confirm_password: '' });
+        alert('Contraseña actualizada correctamente');
+      },
+      onError: (error: any) => alert(error?.response?.data?.error || 'No se pudo actualizar la contraseña'),
     }
   );
 
@@ -149,6 +162,7 @@ export default function Users() {
   const openCreateUser = () => {
     setEditingUser(null);
     setUserForm({ username: '', password: '', worker_id: '', profile_id: activeProfiles[0]?.id || '' });
+    setPasswordForm({ current_password: '', new_password: '', confirm_password: '' });
     setEditPermissions({});
     setUserModal(true);
   };
@@ -160,6 +174,7 @@ export default function Users() {
       profile_id: item.profile_id ? String(item.profile_id) : '',
       is_active: item.is_active === true || Number(item.is_active) === 1,
     });
+    setPasswordForm({ current_password: '', new_password: '', confirm_password: '' });
     setEditPermissions(await usersApi.getPermissions(item.id));
     setUserModal(true);
   };
@@ -202,6 +217,30 @@ export default function Users() {
       permissions: item.permissions || emptyPermissions(),
     });
     setProfileModal(true);
+  };
+
+  const handleChangeUserPassword = () => {
+    if (!editingUser) return;
+    if (editingUser.id === user?.id && !passwordForm.current_password.trim()) {
+      alert('Ingrese la contraseña actual');
+      return;
+    }
+    if (passwordForm.new_password.length < 6) {
+      alert('La nueva contraseña debe tener al menos 6 caracteres');
+      return;
+    }
+    if (passwordForm.new_password !== passwordForm.confirm_password) {
+      alert('La confirmación no coincide con la nueva contraseña');
+      return;
+    }
+
+    changePasswordMutation.mutate({
+      id: editingUser.id,
+      data: {
+        current_password: editingUser.id === user?.id ? passwordForm.current_password : undefined,
+        new_password: passwordForm.new_password,
+      },
+    });
   };
 
   if (user?.role !== 'admin') {
@@ -383,7 +422,7 @@ export default function Users() {
       )}
 
       {userModal && (
-        <div className="modal-overlay" onClick={() => { setUserModal(false); setEditingUser(null); }}>
+        <div className="modal-overlay" onClick={() => { setUserModal(false); setEditingUser(null); setPasswordForm({ current_password: '', new_password: '', confirm_password: '' }); }}>
           <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
             <h2>{editingUser ? `Editar Usuario - ${editingUser.username}` : 'Nuevo Usuario'}</h2>
             <form
@@ -465,11 +504,62 @@ export default function Users() {
                       <option value="0">Inactivo</option>
                     </select>
                   </div>
+                  <div className="password-panel">
+                    <div className="password-panel-header">
+                      <strong>Cambiar contraseña</strong>
+                      <span>Dejar en blanco si no deseas cambiarla.</span>
+                    </div>
+                    {editingUser.id === user?.id && (
+                      <div className="form-group">
+                        <label>Contraseña actual *</label>
+                        <input
+                          type="password"
+                          value={passwordForm.current_password}
+                          onChange={(e) => setPasswordForm({ ...passwordForm, current_password: e.target.value })}
+                          autoComplete="current-password"
+                        />
+                      </div>
+                    )}
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>Nueva contraseña</label>
+                        <input
+                          type="password"
+                          value={passwordForm.new_password}
+                          onChange={(e) => setPasswordForm({ ...passwordForm, new_password: e.target.value })}
+                          minLength={6}
+                          autoComplete="new-password"
+                          placeholder="Mínimo 6 caracteres"
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Confirmar contraseña</label>
+                        <input
+                          type="password"
+                          value={passwordForm.confirm_password}
+                          onChange={(e) => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })}
+                          minLength={6}
+                          autoComplete="new-password"
+                          placeholder="Repetir contraseña"
+                        />
+                      </div>
+                    </div>
+                    <div className="password-panel-actions">
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={handleChangeUserPassword}
+                        disabled={changePasswordMutation.isLoading || !passwordForm.new_password || !passwordForm.confirm_password}
+                      >
+                        {changePasswordMutation.isLoading ? 'Actualizando...' : 'Actualizar contraseña'}
+                      </button>
+                    </div>
+                  </div>
                   <PermissionsEditor permissions={editPermissions} onChange={setEditPermissions} />
                 </>
               )}
               <div className="modal-actions">
-                <button type="button" className="btn-secondary" onClick={() => { setUserModal(false); setEditingUser(null); }}>Cancelar</button>
+                <button type="button" className="btn-secondary" onClick={() => { setUserModal(false); setEditingUser(null); setPasswordForm({ current_password: '', new_password: '', confirm_password: '' }); }}>Cancelar</button>
                 <button type="submit" className="btn-primary" disabled={createUserMutation.isLoading || updateUserMutation.isLoading}>Guardar</button>
               </div>
             </form>

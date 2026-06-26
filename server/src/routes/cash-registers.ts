@@ -4,6 +4,7 @@ import { db } from '../database/init';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import bcrypt from 'bcryptjs';
 import { getNonAdminHistoryDays } from '../utils/companySettings';
+import { getLocalDateTime } from '../utils/dateTime';
 
 const router = express.Router();
 
@@ -77,7 +78,7 @@ router.get('/', authenticateToken, [
   query('user_id').optional().isInt(),
   query('start_date').optional(),
   query('end_date').optional(),
-], (req: AuthRequest, res: Response) => {
+], async (req: AuthRequest, res: Response) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -90,6 +91,15 @@ router.get('/', authenticateToken, [
   };
 
   const isAdmin = req.user?.role === 'admin';
+  const historyDays = await getNonAdminHistoryDays();
+  const minVisibleDate = getPeruAccountingDateOffset(-historyDays);
+  const maxVisibleDate = getPeruAccountingDateOffset(0);
+  const effectiveStartDate = isAdmin
+    ? start_date
+    : (start_date && start_date > minVisibleDate ? start_date : minVisibleDate);
+  const effectiveEndDate = isAdmin
+    ? end_date
+    : (end_date && end_date < maxVisibleDate ? end_date : maxVisibleDate);
   const params: any[] = [];
 
   let querySql = `
@@ -112,7 +122,7 @@ router.get('/', authenticateToken, [
         COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN s.payment_method = 'cash' THEN 1 ELSE 0 END) = 1 THEN s.final_amount ELSE 0 END), 0) as cash_amount
       FROM sales s
       LEFT JOIN payment_methods pm ON pm.value = s.payment_method
-      WHERE (s.status != 'returned' OR s.status IS NULL)
+      WHERE (s.status != 'cancelled' OR s.status IS NULL)
       GROUP BY cash_register_id
     ) agg ON cr.id = agg.cash_register_id
     LEFT JOIN (
@@ -133,14 +143,14 @@ router.get('/', authenticateToken, [
     params.push(req.user!.id);
   }
 
-  if (start_date) {
+  if (effectiveStartDate) {
     querySql += ' AND DATE(cr.accounting_date) >= ?';
-    params.push(start_date);
+    params.push(effectiveStartDate);
   }
 
-  if (end_date) {
+  if (effectiveEndDate) {
     querySql += ' AND DATE(cr.accounting_date) <= ?';
-    params.push(end_date);
+    params.push(effectiveEndDate);
   }
 
   querySql += ' ORDER BY cr.accounting_date DESC, cr.opened_at DESC';
@@ -280,7 +290,7 @@ router.post('/close', authenticateToken, [
          LEFT JOIN payment_methods pm ON pm.value = s.payment_method
          WHERE s.user_id = ? 
            AND s.cash_register_id = ?
-           AND (s.status != 'returned' OR s.status IS NULL)
+           AND (s.status != 'cancelled' OR s.status IS NULL)
          GROUP BY s.payment_method, pm.name`,
         [userId, session.id],
         (aggErr, rows: any[]) => {
@@ -735,6 +745,7 @@ router.post('/movements/manual', authenticateToken, [
 
           const signedAmount = movement_type === 'income' ? Math.abs(Number(amount)) : -Math.abs(Number(amount));
           const label = movement_type === 'income' ? 'Ingreso' : 'Salida';
+          const createdAt = getLocalDateTime();
           const finalDescription = description?.trim()
             ? `${label} - ${account.name}: ${description.trim()}`
             : `${label} - ${account.name}`;
@@ -742,8 +753,8 @@ router.post('/movements/manual', authenticateToken, [
           db.run(
             `INSERT INTO cash_movements (
               cash_register_id, cash_account_id, movement_type, amount, payment_method,
-              reference_type, reference_id, description, user_id
-            ) VALUES (?, ?, ?, ?, ?, 'manual_cash_movement', ?, ?, ?)`,
+              reference_type, reference_id, description, user_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, 'manual_cash_movement', ?, ?, ?, ?)`,
             [
               cashRegister.id,
               cash_account_id,
@@ -753,6 +764,7 @@ router.post('/movements/manual', authenticateToken, [
               cash_account_id,
               finalDescription,
               userId,
+              createdAt,
             ],
             function(insertErr) {
               if (insertErr) {

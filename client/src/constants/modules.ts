@@ -1,6 +1,7 @@
 export const MODULES = [
   { key: 'dashboard', label: 'Dashboard', path: '/' },
   { key: 'products', label: 'Productos', path: '/products' },
+  { key: 'presentation-types', label: 'Tipos de Presentacion', path: '/presentation-types' },
   { key: 'categories', label: 'Categorías', path: '/categories' },
   { key: 'payment-methods', label: 'Métodos de Pago', path: '/payment-methods' },
   { key: 'company-settings', label: 'Mi Empresa', path: '/company-settings' },
@@ -8,6 +9,7 @@ export const MODULES = [
   { key: 'sales', label: 'Ventas', path: '/sales' },
   { key: 'cash-register', label: 'Caja', path: '/cash-register' },
   { key: 'cash-movements', label: 'Movimientos de Caja', path: '/cash-movements' },
+  { key: 'cash-reports', label: 'Reporte de Cajas', path: '/cash-reports' },
   { key: 'product-movements', label: 'Movimientos de Productos', path: '/product-movements' },
   { key: 'alerts', label: 'Alertas', path: '/alerts' },
   { key: 'customers', label: 'Clientes', path: '/customers' },

@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { useQuery } from 'react-query';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { companySettingsApi } from '../api/companySettings';
 import GlobalSearch from './GlobalSearch';
 import {
   LayoutDashboard,
@@ -23,6 +25,7 @@ import {
   CreditCard,
   Building2,
   ClipboardList,
+  Tags,
 } from 'lucide-react';
 import './Layout.css';
 
@@ -37,6 +40,7 @@ const allMenuItems = [
   { path: '/cash-movements', icon: ArrowLeftRight, label: 'Movimientos de Caja', module: 'cash-movements', section: 'Operación' },
   { path: '/returns', icon: RotateCcw, label: 'Devoluciones', module: 'returns', section: 'Operación' },
   { path: '/products', icon: Package, label: 'Productos', module: 'products', section: 'Inventario' },
+  { path: '/presentation-types', icon: Tags, label: 'Tipos de Presentacion', module: 'presentation-types', section: 'Inventario' },
   { path: '/inventory', icon: Warehouse, label: 'Inventario', module: 'inventory', section: 'Inventario' },
   { path: '/product-movements', icon: ClipboardList, label: 'Movimientos de Productos', module: 'product-movements', section: 'Inventario' },
   { path: '/categories', icon: FolderTree, label: 'Categorías', module: 'categories', section: 'Inventario' },
@@ -44,6 +48,7 @@ const allMenuItems = [
   { path: '/suppliers', icon: Truck, label: 'Proveedores', module: 'suppliers', section: 'Gestión' },
   { path: '/purchases', icon: ShoppingBag, label: 'Compras', module: 'purchases', section: 'Gestión' },
   { path: '/reports', icon: BarChart3, label: 'Reportes', module: 'reports', section: 'Reportes' },
+  { path: '/cash-reports', icon: Wallet, label: 'Reporte de Cajas', module: 'cash-reports', section: 'Reportes' },
   { path: '/alerts', icon: AlertTriangle, label: 'Alertas', module: 'alerts', section: 'Reportes' },
   { path: '/company-settings', icon: Building2, label: 'Mi Empresa', module: 'company-settings', section: 'Configuración' },
   { path: '/payment-methods', icon: CreditCard, label: 'Métodos de Pago', module: 'payment-methods', section: 'Configuración' },
@@ -56,6 +61,8 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const [showSearch, setShowSearch] = useState(false);
+  const { data: companySettings } = useQuery('company-settings', companySettingsApi.get);
+  const sidebarTitle = companySettings?.business_name?.trim() || 'Farmacia';
 
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
@@ -96,7 +103,10 @@ export default function Layout() {
     <div className="layout">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <h1>Farmacia</h1>
+          <div className="sidebar-brand" title={sidebarTitle}>
+            <span className="sidebar-brand-mark">{sidebarTitle.charAt(0).toUpperCase()}</span>
+            <h1>{sidebarTitle}</h1>
+          </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button
               className="global-search-trigger"

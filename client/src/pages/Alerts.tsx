@@ -9,6 +9,7 @@ type ExpiringProduct = {
   id: number;
   name: string;
   barcode?: string;
+  laboratory?: string;
   category_name?: string;
   stock?: number;
   expiration_date?: string;
@@ -17,8 +18,11 @@ type ExpiringProduct = {
   days_expired?: number;
 };
 
+type AlertReport = 'low-stock' | 'expiring-soon' | 'expired';
+
 export default function Alerts() {
   const [days, setDays] = useState(30);
+  const [activeReport, setActiveReport] = useState<AlertReport>('low-stock');
 
   const exportExcel = async (path: string, filename: string) => {
     try {
@@ -79,7 +83,11 @@ export default function Alerts() {
       </div>
 
       <div className="alerts-summary">
-        <div className="alert-card">
+        <button
+          type="button"
+          className={`alert-card ${activeReport === 'low-stock' ? 'active' : ''}`}
+          onClick={() => setActiveReport('low-stock')}
+        >
           <div className="alert-icon warning">
             <AlertTriangle size={20} />
           </div>
@@ -87,8 +95,12 @@ export default function Alerts() {
             <div className="alert-count">{summary.lowStock}</div>
             <div className="alert-label">Stock bajo</div>
           </div>
-        </div>
-        <div className="alert-card">
+        </button>
+        <button
+          type="button"
+          className={`alert-card ${activeReport === 'expiring-soon' ? 'active' : ''}`}
+          onClick={() => setActiveReport('expiring-soon')}
+        >
           <div className="alert-icon warning">
             <Clock size={20} />
           </div>
@@ -96,8 +108,12 @@ export default function Alerts() {
             <div className="alert-count">{summary.expiringSoon}</div>
             <div className="alert-label">Por vencer (≤ {days} días)</div>
           </div>
-        </div>
-        <div className="alert-card">
+        </button>
+        <button
+          type="button"
+          className={`alert-card ${activeReport === 'expired' ? 'active' : ''}`}
+          onClick={() => setActiveReport('expired')}
+        >
           <div className="alert-icon danger">
             <AlertTriangle size={20} />
           </div>
@@ -105,10 +121,10 @@ export default function Alerts() {
             <div className="alert-count">{summary.expired}</div>
             <div className="alert-label">Vencidos</div>
           </div>
-        </div>
+        </button>
       </div>
 
-      <div className="alerts-filters">
+      {activeReport === 'expiring-soon' && <div className="alerts-filters">
         <div className="filters-header">
           <Filter size={18} />
           <span>Configuración</span>
@@ -125,9 +141,9 @@ export default function Alerts() {
             />
           </div>
         </div>
-      </div>
+      </div>}
 
-      <div className="alerts-section">
+      {activeReport === 'low-stock' && <div className="alerts-section">
         <div className="alerts-section-header">
           <div className="alerts-section-title">
             <Package size={20} />
@@ -146,6 +162,7 @@ export default function Alerts() {
             <thead>
               <tr>
                 <th>Producto</th>
+                <th>Laboratorio</th>
                 <th>Categoría</th>
                 <th>Stock</th>
                 <th>Mínimo</th>
@@ -154,7 +171,7 @@ export default function Alerts() {
             </thead>
             <tbody>
               {loadingLowStock ? (
-                <tr><td colSpan={5} className="empty-cell">Cargando...</td></tr>
+                <tr><td colSpan={6} className="empty-cell">Cargando...</td></tr>
               ) : (lowStock && lowStock.length > 0) ? (
                 lowStock.map((i) => (
                   <tr key={i.id}>
@@ -162,6 +179,7 @@ export default function Alerts() {
                       <div style={{ fontWeight: 700 }}>{i.product_name}</div>
                       <div style={{ color: 'var(--text-light)', fontSize: '0.85rem' }}>{i.barcode || '-'}</div>
                     </td>
+                    <td>{i.laboratory || '-'}</td>
                     <td>{i.category_name || '-'}</td>
                     <td style={{ fontWeight: 700, color: 'var(--danger-dark)' }}>{i.quantity}</td>
                     <td>{i.min_stock}</td>
@@ -169,14 +187,14 @@ export default function Alerts() {
                   </tr>
                 ))
               ) : (
-                <tr><td colSpan={5} className="empty-cell">No hay alertas de stock bajo.</td></tr>
+                <tr><td colSpan={6} className="empty-cell">No hay alertas de stock bajo.</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
 
-      <div className="alerts-section">
+      {activeReport === 'expiring-soon' && <div className="alerts-section">
         <div className="alerts-section-header">
           <div className="alerts-section-title">
             <Clock size={20} />
@@ -195,6 +213,7 @@ export default function Alerts() {
             <thead>
               <tr>
                 <th>Producto</th>
+                <th>Laboratorio</th>
                 <th>Fecha de vencimiento</th>
                 <th>Días restantes</th>
                 <th>Stock</th>
@@ -202,7 +221,7 @@ export default function Alerts() {
             </thead>
             <tbody>
               {loadingExpiring ? (
-                <tr><td colSpan={4} className="empty-cell">Cargando...</td></tr>
+                <tr><td colSpan={5} className="empty-cell">Cargando...</td></tr>
               ) : (expiringSoon && expiringSoon.length > 0) ? (
                 expiringSoon.map((p) => (
                   <tr key={p.id}>
@@ -210,6 +229,7 @@ export default function Alerts() {
                       <div style={{ fontWeight: 700 }}>{p.name}</div>
                       <div style={{ color: 'var(--text-light)', fontSize: '0.85rem' }}>{p.barcode || '-'}</div>
                     </td>
+                    <td>{p.laboratory || '-'}</td>
                     <td>{p.expiration_date ? new Date(p.expiration_date).toLocaleDateString('es-ES') : '-'}</td>
                     <td style={{ fontWeight: 700, color: 'var(--warning-dark)' }}>
                       {Math.floor(p.days_until_expiration || 0)} días
@@ -218,14 +238,14 @@ export default function Alerts() {
                   </tr>
                 ))
               ) : (
-                <tr><td colSpan={4} className="empty-cell">No hay productos por vencer.</td></tr>
+                <tr><td colSpan={5} className="empty-cell">No hay productos por vencer.</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
 
-      <div className="alerts-section">
+      {activeReport === 'expired' && <div className="alerts-section">
         <div className="alerts-section-header">
           <div className="alerts-section-title">
             <AlertTriangle size={20} />
@@ -244,6 +264,7 @@ export default function Alerts() {
             <thead>
               <tr>
                 <th>Producto</th>
+                <th>Laboratorio</th>
                 <th>Fecha de vencimiento</th>
                 <th>Días vencido</th>
                 <th>Stock</th>
@@ -251,7 +272,7 @@ export default function Alerts() {
             </thead>
             <tbody>
               {loadingExpired ? (
-                <tr><td colSpan={4} className="empty-cell">Cargando...</td></tr>
+                <tr><td colSpan={5} className="empty-cell">Cargando...</td></tr>
               ) : (expired && expired.length > 0) ? (
                 expired.map((p) => (
                   <tr key={p.id}>
@@ -259,6 +280,7 @@ export default function Alerts() {
                       <div style={{ fontWeight: 700 }}>{p.name}</div>
                       <div style={{ color: 'var(--text-light)', fontSize: '0.85rem' }}>{p.barcode || '-'}</div>
                     </td>
+                    <td>{p.laboratory || '-'}</td>
                     <td>{p.expiration_date ? new Date(p.expiration_date).toLocaleDateString('es-ES') : '-'}</td>
                     <td style={{ fontWeight: 700, color: 'var(--danger-dark)' }}>
                       {Math.floor(p.days_expired || 0)} días
@@ -267,12 +289,12 @@ export default function Alerts() {
                   </tr>
                 ))
               ) : (
-                <tr><td colSpan={4} className="empty-cell">No hay productos vencidos.</td></tr>
+                <tr><td colSpan={5} className="empty-cell">No hay productos vencidos.</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

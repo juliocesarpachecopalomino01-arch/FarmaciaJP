@@ -5,7 +5,7 @@ import { useAuth } from '../hooks/useAuth';
 import { returnsApi, CreateReturnRequest } from '../api/returns';
 import { salesApi } from '../api/sales';
 import { companySettingsApi } from '../api/companySettings';
-import { Download, Filter, Plus, RotateCcw } from 'lucide-react';
+import { Download, Filter, Plus, RotateCcw, Search } from 'lucide-react';
 import { format } from 'date-fns';
 import './Returns.css';
 
@@ -33,6 +33,7 @@ export default function Returns() {
   const saleIdParam = searchParams.get('sale_id');
   const [showModal, setShowModal] = useState(false);
   const [selectedSaleId, setSelectedSaleId] = useState<number | null>(saleIdParam ? Number(saleIdParam) : null);
+  const [saleSearch, setSaleSearch] = useState('');
   const [returnItems, setReturnItems] = useState<Array<{ sale_item_id: number; product_name: string; max_quantity: number; quantity: number }>>([]);
   const [returnForm, setReturnForm] = useState({
     reason: '',
@@ -104,6 +105,7 @@ export default function Returns() {
 
   const handleSaleSelect = (saleId: number) => {
     setSelectedSaleId(saleId);
+    setSaleSearch('');
     setShowModal(true);
     
     // Load sale items with available quantities
@@ -167,6 +169,22 @@ export default function Returns() {
   };
 
   const returns = returnsData || [];
+  const availableSales = salesData?.sales || [];
+  const filteredAvailableSales = useMemo(() => {
+    const needle = saleSearch.trim().toLowerCase();
+    if (!needle) return availableSales;
+
+    return availableSales.filter((sale) => {
+      const searchableText = [
+        sale.sale_number,
+        sale.customer_name || 'Cliente General',
+        sale.final_amount?.toFixed(2),
+        format(new Date(sale.created_at), 'dd/MM/yyyy'),
+      ].join(' ').toLowerCase();
+
+      return searchableText.includes(needle);
+    });
+  }, [availableSales, saleSearch]);
 
   const handleExportReturns = async () => {
     try {
@@ -188,7 +206,7 @@ export default function Returns() {
             <Download size={20} />
             Exportar Excel
           </button>
-          <button className="btn-primary" onClick={() => { setSelectedSaleId(null); setShowModal(true); }}>
+          <button className="btn-primary" onClick={() => { setSelectedSaleId(null); setSaleSearch(''); setShowModal(true); }}>
             <Plus size={20} />
             Nueva Devolución
           </button>
@@ -255,7 +273,7 @@ export default function Returns() {
       </div>
 
       {showModal && (
-        <div className="modal-overlay" onClick={() => { setShowModal(false); setReturnItems([]); setSelectedSaleId(null); resetForm(); }}>
+        <div className="modal-overlay" onClick={() => { setShowModal(false); setReturnItems([]); setSelectedSaleId(null); setSaleSearch(''); resetForm(); }}>
           <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
             <h2>Nueva Devolución</h2>
             
@@ -263,24 +281,31 @@ export default function Returns() {
               <div className="sale-selection">
                 <div className="form-group">
                   <label>Buscar Venta</label>
-                  <select
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        handleSaleSelect(Number(e.target.value));
-                      }
-                    }}
-                  >
-                    <option value="">Seleccionar venta...</option>
-                    {salesData?.sales && salesData.sales.length > 0 ? (
-                      salesData.sales.map((sale) => (
-                        <option key={sale.id} value={sale.id}>
-                          {sale.sale_number} - {sale.customer_name || 'Cliente General'} - ${sale.final_amount.toFixed(2)} - {format(new Date(sale.created_at), 'dd/MM/yyyy')}
-                        </option>
-                      ))
+                  <div className="return-sale-search">
+                    <Search size={16} />
+                    <input
+                      value={saleSearch}
+                      onChange={(e) => setSaleSearch(e.target.value)}
+                      placeholder="Escribe venta, cliente, monto o fecha..."
+                      autoFocus
+                    />
+                  </div>
+                  <div className="return-sale-results">
+                    {availableSales.length === 0 ? (<div className="return-sale-empty">No hay ventas disponibles para devolucion</div>) : availableSales.length === 0 ? (
+                      <div className="return-sale-empty">No hay ventas disponibles para devoluciÃ³n</div>
+                    ) : filteredAvailableSales.length === 0 ? (<div className="return-sale-empty">No se encontraron ventas con esa busqueda</div>) : filteredAvailableSales.length === 0 ? (
+                      <div className="return-sale-empty">No se encontraron ventas con esa bÃºsqueda</div>
                     ) : (
-                      <option value="" disabled>No hay ventas disponibles para devolución</option>
+                      filteredAvailableSales.map((sale) => (
+                        <button key={sale.id} type="button" onClick={() => handleSaleSelect(sale.id)}>
+                          <strong>{sale.sale_number}</strong>
+                          <span>{sale.customer_name || 'Cliente General'}</span>
+                          <span>${sale.final_amount.toFixed(2)}</span>
+                          <span>{format(new Date(sale.created_at), 'dd/MM/yyyy')}</span>
+                        </button>
+                      ))
                     )}
-                  </select>
+                  </div>
                 </div>
               </div>
             ) : selectedSale && (
@@ -325,19 +350,18 @@ export default function Returns() {
                               </td>
                               <td>${saleItem?.unit_price.toFixed(2) || '0.00'}</td>
                               <td>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max={item.max_quantity}
-                                  value={item.quantity}
-                                  onChange={(e) => updateReturnItemQuantity(item.sale_item_id, Number(e.target.value))}
-                                  style={{ width: '80px' }}
-                                />
-                                <span style={{ fontSize: '0.85rem', color: 'var(--text-light)', marginLeft: '0.5rem' }}>
-                                  (Disponible: {item.max_quantity})
-                                </span>
+                                <div className="return-quantity-cell">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max={item.max_quantity}
+                                    value={item.quantity}
+                                    onChange={(e) => updateReturnItemQuantity(item.sale_item_id, Number(e.target.value))}
+                                  />
+                                  <span>Disponible: {item.max_quantity}</span>
+                                </div>
                               </td>
-                              <td>${refund.toFixed(2)}</td>
+                              <td className="return-refund-cell">${refund.toFixed(2)}</td>
                             </tr>
                           );
                         })
@@ -386,7 +410,7 @@ export default function Returns() {
                 </div>
 
                 <div className="modal-actions">
-                  <button type="button" className="btn-secondary" onClick={() => { setShowModal(false); setReturnItems([]); setSelectedSaleId(null); resetForm(); }}>
+                  <button type="button" className="btn-secondary" onClick={() => { setShowModal(false); setReturnItems([]); setSelectedSaleId(null); setSaleSearch(''); resetForm(); }}>
                     Cancelar
                   </button>
                   <button type="submit" className="btn-primary" disabled={returnItems.filter(item => item.quantity > 0).length === 0}>

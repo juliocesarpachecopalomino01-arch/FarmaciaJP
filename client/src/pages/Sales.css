@@ -515,16 +515,17 @@
 
 .cash-count-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 0.45rem;
 }
 
 .cash-count-row {
   display: grid;
-  grid-template-columns: minmax(70px, 1fr) 74px 84px;
+  grid-template-columns: minmax(70px, 0.9fr) 92px minmax(78px, 0.8fr);
   align-items: center;
   gap: 0.45rem;
-  padding: 0.45rem;
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: var(--radius-sm);
   background: rgba(255, 255, 255, 0.86);
@@ -533,6 +534,8 @@
 .cash-count-row span {
   font-weight: 800;
   font-size: 0.75rem;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .cash-count-row input {
@@ -540,11 +543,16 @@
   padding: 0.25rem 0.4rem;
   text-align: center;
   font-size: 0.78rem;
+  width: 92px;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .cash-count-row strong {
+  min-width: 0;
   text-align: right;
   font-size: 0.75rem;
+  white-space: nowrap;
 }
 
 .cash-count-empty {

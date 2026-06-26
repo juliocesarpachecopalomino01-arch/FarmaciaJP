@@ -1,22 +1,64 @@
 import { useState } from 'react';
-import { useQuery } from 'react-query';
+import { useMutation, useQuery } from 'react-query';
 import { productsApi, Product } from '../api/products';
-import { QrCode, Package, DollarSign, Calendar, AlertCircle, CheckCircle2 } from 'lucide-react';
+import {
+  AlertCircle,
+  Barcode,
+  Calendar,
+  CheckCircle2,
+  DollarSign,
+  Package,
+  QrCode,
+  X,
+} from 'lucide-react';
 import './ScanQR.css';
+
+function extractQrCode(value: string) {
+  const raw = value.trim();
+  if (!raw) return '';
+
+  try {
+    const url = new URL(raw);
+    const parts = url.pathname.split('/');
+    const productQrIndex = parts.findIndex((part) => part === 'product-qr');
+    if (productQrIndex >= 0) {
+      return decodeURIComponent(parts[productQrIndex + 1] || '').trim();
+    }
+  } catch {
+    // The scanner usually sends a raw barcode, so non-URLs are valid.
+  }
+
+  const productQrMatch = raw.match(/product-qr\/([^/?#]+)/i);
+  if (productQrMatch?.[1]) return decodeURIComponent(productQrMatch[1]).trim();
+
+  return raw;
+}
 
 export default function ScanQR() {
   const [qrCode, setQrCode] = useState('');
   const [scannedProduct, setScannedProduct] = useState<Product | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const searchValue = extractQrCode(qrCode);
 
-  const { isLoading, refetch } = useQuery(
-    ['product-by-qr', qrCode],
-    () => productsApi.getByQRCode(qrCode),
+  const { data: suggestionsData, isFetching: isFetchingSuggestions } = useQuery(
+    ['scan-qr-suggestions', searchValue],
+    () => productsApi.getAll({ search: searchValue, is_active: 1, limit: 8 }),
     {
-      enabled: false, // Only fetch when manually triggered
+      enabled: searchValue.length >= 2,
+      keepPreviousData: true,
+    }
+  );
+
+  const suggestions = suggestionsData?.products || [];
+
+  const scanMutation = useMutation(
+    (code: string) => productsApi.getByQRCode(code),
+    {
       onSuccess: (data) => {
         setScannedProduct(data);
         setError(null);
+        setSuggestionsOpen(false);
       },
       onError: (err: any) => {
         setScannedProduct(null);
@@ -26,18 +68,35 @@ export default function ScanQR() {
   );
 
   const handleScan = () => {
-    if (!qrCode.trim()) {
-      setError('Por favor ingresa un código QR');
+    const code = extractQrCode(qrCode);
+    if (!code) {
+      setError('Por favor ingresa o escanea un codigo QR');
       return;
     }
+
+    setQrCode(code);
     setError(null);
-    refetch();
+    scanMutation.mutate(code);
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+  const handleKeyPress = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
       handleScan();
     }
+  };
+
+  const handleSelectProduct = (product: Product) => {
+    setScannedProduct(product);
+    setQrCode(product.barcode || product.name);
+    setError(null);
+    setSuggestionsOpen(false);
+  };
+
+  const handleClear = () => {
+    setQrCode('');
+    setScannedProduct(null);
+    setError(null);
+    setSuggestionsOpen(false);
   };
 
   const getExpirationStatus = (expirationDate?: string) => {
@@ -46,7 +105,7 @@ export default function ScanQR() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     exp.setHours(0, 0, 0, 0);
-    
+
     if (exp < today) {
       return { status: 'expired', label: 'Vencido', days: Math.ceil((today.getTime() - exp.getTime()) / 86400000) };
     }
@@ -63,8 +122,8 @@ export default function ScanQR() {
     <div className="page-container">
       <div className="page-header">
         <div>
-          <h1>Escanear Código QR</h1>
-          <p>Escanea o ingresa el código QR de un producto para ver su información completa</p>
+          <h1>Escanear Codigo QR</h1>
+          <p>Escanea, pega el enlace QR o busca un producto para ver su informacion completa</p>
         </div>
       </div>
 
@@ -72,18 +131,62 @@ export default function ScanQR() {
         <div className="scan-input-section">
           <div className="scan-input-wrapper">
             <QrCode size={24} className="scan-icon" />
-            <input
-              type="text"
-              placeholder="Ingresa o escanea el código QR del producto"
-              value={qrCode}
-              onChange={(e) => setQrCode(e.target.value)}
-              onKeyPress={handleKeyPress}
-              className="scan-input"
-              autoFocus
-            />
-            <button onClick={handleScan} className="btn-primary scan-button" disabled={isLoading}>
-              {isLoading ? 'Buscando...' : 'Buscar'}
+            <div className="scan-search-box">
+              <input
+                type="text"
+                placeholder="Escanea, pega la URL QR o busca por nombre/codigo..."
+                value={qrCode}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setQrCode(nextValue);
+                  setError(null);
+                  setSuggestionsOpen(Boolean(nextValue.trim()));
+                  if (!nextValue.trim() || scannedProduct) setScannedProduct(null);
+                }}
+                onKeyDown={handleKeyPress}
+                onFocus={() => setSuggestionsOpen(true)}
+                className="scan-input"
+                autoFocus
+              />
+              {qrCode && (
+                <button type="button" className="scan-clear-button" onClick={handleClear} title="Limpiar busqueda">
+                  <X size={16} />
+                </button>
+              )}
+              {suggestionsOpen && searchValue.length >= 2 && (
+                <div className="scan-suggestions">
+                  {isFetchingSuggestions && suggestions.length === 0 ? (
+                    <div className="scan-suggestion-empty">Buscando productos...</div>
+                  ) : suggestions.length > 0 ? (
+                    suggestions.map((product) => (
+                      <button
+                        type="button"
+                        key={product.id}
+                        className="scan-suggestion-item"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => handleSelectProduct(product)}
+                      >
+                        <span className="scan-suggestion-icon"><Barcode size={15} /></span>
+                        <span>
+                          <strong>{product.name}</strong>
+                          <small>{product.barcode || 'Sin codigo'} - {product.category_name || 'Sin categoria'} - Stock {product.stock || 0}</small>
+                        </span>
+                        <em>S/ {Number(product.unit_price || 0).toFixed(2)}</em>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="scan-suggestion-empty">No se encontraron coincidencias</div>
+                  )}
+                </div>
+              )}
+            </div>
+            <button onClick={handleScan} className="btn-primary scan-button" disabled={scanMutation.isLoading}>
+              {scanMutation.isLoading ? 'Buscando...' : 'Buscar'}
             </button>
+          </div>
+          <div className="scan-helper-row">
+            <span>Busca por nombre, codigo de barras, categoria o pega el enlace completo del QR.</span>
+            {scannedProduct && <button type="button" onClick={handleClear}>Nueva busqueda</button>}
           </div>
           {error && (
             <div className="error-message">
@@ -99,7 +202,7 @@ export default function ScanQR() {
               <div className="product-title-section">
                 <h2>{scannedProduct.name}</h2>
                 {scannedProduct.barcode && (
-                  <p className="product-barcode">Código: {scannedProduct.barcode}</p>
+                  <p className="product-barcode">Codigo: {scannedProduct.barcode}</p>
                 )}
               </div>
               <div className={`product-status-badge ${scannedProduct.is_active === 1 ? 'active' : 'inactive'}`}>
@@ -127,10 +230,10 @@ export default function ScanQR() {
               <div className="detail-item">
                 <div className="detail-label">
                   <Package size={18} />
-                  <span>Categoría</span>
+                  <span>Categoria</span>
                 </div>
                 <div className="detail-value">
-                  {scannedProduct.category_name || 'Sin categoría'}
+                  {scannedProduct.category_name || 'Sin categoria'}
                 </div>
               </div>
 
@@ -140,7 +243,7 @@ export default function ScanQR() {
                   <span>Precio Unitario</span>
                 </div>
                 <div className="detail-value price-value">
-                  ${scannedProduct.unit_price.toFixed(2)}
+                  S/ {scannedProduct.unit_price.toFixed(2)}
                 </div>
               </div>
 
@@ -151,7 +254,7 @@ export default function ScanQR() {
                     <span>Precio de Costo</span>
                   </div>
                   <div className="detail-value cost-price">
-                    ${scannedProduct.cost_price.toFixed(2)}
+                    S/ {scannedProduct.cost_price.toFixed(2)}
                   </div>
                 </div>
               )}
@@ -173,7 +276,7 @@ export default function ScanQR() {
                 <div className="detail-item">
                   <div className="detail-label">
                     <Package size={18} />
-                    <span>Stock Mínimo</span>
+                    <span>Stock Minimo</span>
                   </div>
                   <div className="detail-value">
                     {scannedProduct.min_stock} unidades
@@ -185,7 +288,7 @@ export default function ScanQR() {
                 <div className="detail-item">
                   <div className="detail-label">
                     <Package size={18} />
-                    <span>Stock Máximo</span>
+                    <span>Stock Maximo</span>
                   </div>
                   <div className="detail-value">
                     {scannedProduct.max_stock} unidades
@@ -204,7 +307,7 @@ export default function ScanQR() {
                     {expirationStatus && (
                       <span className={`expiration-status ${expirationStatus.status}`}>
                         {' '}({expirationStatus.label}
-                        {expirationStatus.days !== undefined && ` - ${expirationStatus.days} días`})
+                        {expirationStatus.days !== undefined && ` - ${expirationStatus.days} dias`})
                       </span>
                     )}
                   </div>
@@ -217,14 +320,14 @@ export default function ScanQR() {
                 </div>
                 <div className="detail-value">
                   <span className={`prescription-badge ${scannedProduct.requires_prescription ? 'prescription-yes' : 'prescription-no'}`}>
-                    {scannedProduct.requires_prescription ? 'Sí' : 'No'}
+                    {scannedProduct.requires_prescription ? 'Si' : 'No'}
                   </span>
                 </div>
               </div>
             </div>
 
             <div className="product-footer">
-              <p className="product-meta">Información actualizada del producto por QR</p>
+              <p className="product-meta">Informacion actualizada del producto por QR</p>
             </div>
           </div>
         )}

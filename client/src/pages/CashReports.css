@@ -1,0 +1,14 @@
+.cash-report-table table {
+  min-width: 1160px;
+}
+
+.cash-report-table td,
+.cash-report-table th {
+  white-space: nowrap;
+}
+
+.cash-report-table td:first-child,
+.cash-report-table th:first-child {
+  white-space: normal;
+  min-width: 160px;
+}

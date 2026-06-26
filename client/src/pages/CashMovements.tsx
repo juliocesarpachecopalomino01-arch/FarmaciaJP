@@ -52,6 +52,12 @@ function formatCurrency(value: number) {
   return `S/ ${value.toFixed(2)}`;
 }
 
+function normalizeDisplayText(value?: string | null) {
+  return (value || '-')
+    .replace(/DevoluciÃ³n/g, 'Devolucion')
+    .replace(/devoluciÃ³n/g, 'devolucion');
+}
+
 export default function CashMovements() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
@@ -405,7 +411,7 @@ export default function CashMovements() {
                   <td>
                     <strong>{cm.cash_account_name || '-'}</strong>
                     <br />
-                    <small>{cm.description || '-'}</small>
+                    <small>{normalizeDisplayText(cm.description)}</small>
                   </td>
                   <td>{movementTypeLabel(cm.movement_type)}</td>
                   <td>{cm.payment_method_name || cm.payment_method || '-'}</td>

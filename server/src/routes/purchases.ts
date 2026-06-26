@@ -8,6 +8,27 @@ import bcrypt from 'bcryptjs';
 const router = express.Router();
 const AUDIT_PASSWORD = process.env.AUDIT_PASSWORD || 'admin123';
 
+function getLocalDateTime(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Lima',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const values = parts.reduce<Record<string, string>>((acc, part) => {
+    if (part.type !== 'literal') acc[part.type] = part.value;
+    return acc;
+  }, {});
+
+  const hour = values.hour === '24' ? '00' : values.hour;
+  return `${values.year}-${values.month}-${values.day} ${hour}:${values.minute}:${values.second}`;
+}
+
 function getOpenCashRegister(userId: number): Promise<{ id: number } | null> {
   return new Promise((resolve) => {
     db.get(
@@ -266,12 +287,13 @@ router.post('/', authenticateToken, [
   validateItems()
     .then(() => {
       const finalAmount = totalAmount - discount + tax_amount;
+      const createdAt = getLocalDateTime();
 
       // Create purchase
       db.run(
-        `INSERT INTO purchases (purchase_number, supplier_id, user_id, total_amount, discount, tax_amount, final_amount, notes, afecta_caja, cash_register_id, cash_payment_method)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [purchaseNumber, supplier_id, req.user!.id, totalAmount, discount, tax_amount, finalAmount, notes || null, afecta_caja ? 1 : 0, cashRegisterId, resolvedCashPaymentMethod],
+        `INSERT INTO purchases (purchase_number, supplier_id, user_id, total_amount, discount, tax_amount, final_amount, notes, afecta_caja, cash_register_id, cash_payment_method, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [purchaseNumber, supplier_id, req.user!.id, totalAmount, discount, tax_amount, finalAmount, notes || null, afecta_caja ? 1 : 0, cashRegisterId, resolvedCashPaymentMethod, createdAt],
         function(err) {
           if (err) {
             return res.status(500).json({ error: 'Database error' });
@@ -295,8 +317,8 @@ router.post('/', authenticateToken, [
 
                 // Update inventory
                 db.run(
-                  'UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-                  [item.stock_quantity, item.product_id],
+                  'UPDATE inventory SET quantity = quantity + ?, last_updated = ? WHERE product_id = ?',
+                  [item.stock_quantity, createdAt, item.product_id],
                   () => {}
                 );
 
@@ -311,9 +333,9 @@ router.post('/', authenticateToken, [
 
                 // Record inventory movement
                 db.run(
-                  `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, notes)
-                   VALUES (?, 'entry', ?, ?, ?, ?)`,
-                  [item.product_id, item.stock_quantity, purchaseNumber, req.user!.id, 'Compra a proveedor'],
+                  `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, notes, created_at)
+                   VALUES (?, 'entry', ?, ?, ?, ?, ?)`,
+                  [item.product_id, item.stock_quantity, purchaseNumber, req.user!.id, 'Compra a proveedor', createdAt],
                   () => {}
                 );
 
@@ -344,9 +366,9 @@ router.post('/', authenticateToken, [
                   // If afecta_caja: record cash movement (outflow) before confirming the purchase.
                   if (afecta_caja && cashRegisterId) {
                     db.run(
-                      `INSERT INTO cash_movements (cash_register_id, movement_type, amount, payment_method, reference_type, reference_id, description, user_id)
-                       VALUES (?, 'purchase', ?, ?, 'purchase', ?, ?, ?)`,
-                      [cashRegisterId, -finalAmount, resolvedCashPaymentMethod, purchaseId, `Compra ${purchaseNumber}`, req.user!.id],
+                      `INSERT INTO cash_movements (cash_register_id, movement_type, amount, payment_method, reference_type, reference_id, description, user_id, created_at)
+                       VALUES (?, 'purchase', ?, ?, 'purchase', ?, ?, ?, ?)`,
+                      [cashRegisterId, -finalAmount, resolvedCashPaymentMethod, purchaseId, `Compra ${purchaseNumber}`, req.user!.id, createdAt],
                       (cmErr) => {
                         if (cmErr) {
                           console.error('Error recording cash movement for purchase:', cmErr);
@@ -433,6 +455,7 @@ router.put('/:id', authenticateToken, [
             return res.status(400).json({ error: errors.join(', ') });
           }
           const finalAmount = totalAmount - (Number(discount) || 0) + (Number(tax_amount) || 0);
+          const updatedAt = getLocalDateTime();
 
           // Get old items to reverse inventory
           db.all('SELECT * FROM purchase_items WHERE purchase_id = ?', [purchaseId], (oldErr, oldItems: any[]) => {
@@ -448,7 +471,7 @@ router.put('/:id', authenticateToken, [
               let done = 0;
               productIds.forEach((pid) => {
                 const qty = byProduct[pid];
-                db.run('UPDATE inventory SET quantity = quantity - ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?', [qty, pid], () => {
+                db.run('UPDATE inventory SET quantity = quantity - ?, last_updated = ? WHERE product_id = ?', [qty, updatedAt, pid], () => {
                   done++;
                   if (done === productIds.length) {
                     db.run("DELETE FROM inventory_movements WHERE reference_number = ? AND notes = 'Compra a proveedor'", [purchase.purchase_number], callback);
@@ -482,10 +505,10 @@ router.put('/:id', authenticateToken, [
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                         [purchaseId, pi.product_id, pi.quantity, pi.presentation_id, pi.presentation_name, pi.conversion_factor, pi.stock_quantity, pi.unit_price, pi.cost_price, pi.subtotal],
                         () => {
-                          db.run('UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?', [pi.stock_quantity, pi.product_id], () => {
+                          db.run('UPDATE inventory SET quantity = quantity + ?, last_updated = ? WHERE product_id = ?', [pi.stock_quantity, updatedAt, pi.product_id], () => {
                             db.run(
-                              'INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)',
-                              [pi.product_id, 'entry', pi.stock_quantity, purchase.purchase_number, req.user!.id, 'Compra a proveedor'],
+                              'INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                              [pi.product_id, 'entry', pi.stock_quantity, purchase.purchase_number, req.user!.id, 'Compra a proveedor', updatedAt],
                               () => {
                                 if (pi.cost_price) {
                                   db.run('UPDATE products SET cost_price = ? WHERE id = ?', [pi.cost_price, pi.product_id], () => {});
@@ -579,9 +602,10 @@ router.delete('/:id', authenticateToken, [
       };
 
       if (productIds.length === 0) return finish();
+      const deletedAt = getLocalDateTime();
       productIds.forEach((pid) => {
         const qty = byProduct[pid];
-        db.run('UPDATE inventory SET quantity = quantity - ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?', [qty, pid], () => {
+        db.run('UPDATE inventory SET quantity = quantity - ?, last_updated = ? WHERE product_id = ?', [qty, deletedAt, pid], () => {
           done++;
           if (done === productIds.length) finish();
         });

@@ -1,21 +1,33 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { productPresentationsApi, productsApi, Product } from '../api/products';
 import { categoriesApi, Category } from '../api/categories';
 import { priceHistoryApi } from '../api/priceHistory';
-import { Plus, Edit, Search, History, Layers, Filter, CheckCircle2, XCircle, Package, Power, PowerOff, Upload, QrCode, Download, Boxes, AlertTriangle, BadgeDollarSign, ShieldCheck } from 'lucide-react';
+import { Plus, Edit, Search, History, Layers, CheckCircle2, XCircle, Package, Power, PowerOff, Upload, QrCode, Download, Boxes, AlertTriangle, BadgeDollarSign, ShieldCheck } from 'lucide-react';
 import './Products.css';
 
 type CategoryFilterSearchProps = {
   categories: Category[];
   selectedId?: number;
   onSelect: (categoryId?: number) => void;
+  placeholder?: string;
+  emptyLabel?: string;
 };
 
-function CategoryFilterSearch({ categories, selectedId, onSelect }: CategoryFilterSearchProps) {
+function CategoryFilterSearch({
+  categories,
+  selectedId,
+  onSelect,
+  placeholder = 'Todas las categorías',
+  emptyLabel = 'Todas las categorías',
+}: CategoryFilterSearchProps) {
   const selectedCategory = categories.find((category) => category.id === selectedId);
   const [value, setValue] = useState(selectedCategory?.name || '');
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    setValue(selectedCategory?.name || '');
+  }, [selectedCategory?.name]);
 
   const filteredCategories = useMemo(() => {
     const query = value.trim().toLowerCase();
@@ -34,7 +46,7 @@ function CategoryFilterSearch({ categories, selectedId, onSelect }: CategoryFilt
       <input
         type="text"
         value={value}
-        placeholder="Todas las categorías"
+        placeholder={placeholder}
         onChange={(event) => {
           setValue(event.target.value);
           onSelect(undefined);
@@ -52,7 +64,7 @@ function CategoryFilterSearch({ categories, selectedId, onSelect }: CategoryFilt
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => selectCategory()}
           >
-            Todas las categorías
+            {emptyLabel}
           </button>
           {filteredCategories.map((category) => (
             <button
@@ -74,10 +86,19 @@ function CategoryFilterSearch({ categories, selectedId, onSelect }: CategoryFilt
   );
 }
 
+const PRODUCTS_PAGE_SIZE = 100;
+type ProductsQuickFilter = 'all' | 'active' | 'low_stock' | 'bonus';
+
 export default function Products() {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<number | undefined>();
   const [statusFilter, setStatusFilter] = useState<number | undefined>();
+  const [quickFilter, setQuickFilter] = useState<ProductsQuickFilter>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const tableTopScrollRef = useRef<HTMLDivElement | null>(null);
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  const syncingTableScrollRef = useRef(false);
+  const [productTableScrollWidth, setProductTableScrollWidth] = useState(0);
   const [showModal, setShowModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -88,8 +109,6 @@ export default function Products() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [presentationForm, setPresentationForm] = useState({
     presentation_type_id: '',
-    name: '',
-    barcode: '',
     conversion_factor: '1',
     unit_price: '',
     cost_price: '',
@@ -114,8 +133,16 @@ export default function Products() {
 
   const queryClient = useQueryClient();
 
-  const { data: productsData } = useQuery(['products', search, categoryFilter, statusFilter], () =>
-    productsApi.getAll({ search, category_id: categoryFilter, is_active: statusFilter, limit: 100 })
+  const { data: productsData } = useQuery(['products', search, categoryFilter, statusFilter, quickFilter, currentPage], () =>
+    productsApi.getAll({
+      search,
+      category_id: categoryFilter,
+      is_active: statusFilter,
+      quick_filter: quickFilter === 'all' ? undefined : quickFilter,
+      page: currentPage,
+      limit: PRODUCTS_PAGE_SIZE,
+    })
+    , { keepPreviousData: true }
   );
 
   const { data: categories } = useQuery('categories', categoriesApi.getAll);
@@ -133,12 +160,20 @@ export default function Products() {
   );
 
   const { data: presentationTypes = [] } = useQuery('presentation-types', productPresentationsApi.getTypes);
+  const activePresentationTypes = useMemo(
+    () => presentationTypes.filter((type) => Number(type.is_active ?? 1) === 1),
+    [presentationTypes]
+  );
 
   const { data: productPresentations = [] } = useQuery(
     ['product-presentations', selectedProductId],
     () => selectedProductId ? productPresentationsApi.getByProduct(selectedProductId) : Promise.resolve([]),
     { enabled: !!selectedProductId && showPresentationsModal }
   );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, categoryFilter, statusFilter, quickFilter]);
 
   const createMutation = useMutation(productsApi.create, {
     onSuccess: () => {
@@ -181,8 +216,6 @@ export default function Products() {
         queryClient.invalidateQueries('products');
         setPresentationForm({
           presentation_type_id: '',
-          name: '',
-          barcode: '',
           conversion_factor: '1',
           unit_price: '',
           cost_price: '',
@@ -276,8 +309,6 @@ export default function Products() {
     setSelectedProduct(product);
     setPresentationForm({
       presentation_type_id: '',
-      name: '',
-      barcode: '',
       conversion_factor: '1',
       unit_price: product.unit_price?.toString() || '',
       cost_price: product.cost_price?.toString() || '',
@@ -289,12 +320,17 @@ export default function Products() {
   const handleCreatePresentation = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedProductId) return;
+    const selectedType = activePresentationTypes.find((type) => type.id === Number(presentationForm.presentation_type_id));
+    if (!selectedType) {
+      alert('Selecciona un tipo de presentacion.');
+      return;
+    }
+
     createPresentationMutation.mutate({
       productId: selectedProductId,
       presentation: {
-        presentation_type_id: presentationForm.presentation_type_id ? Number(presentationForm.presentation_type_id) : undefined,
-        name: presentationForm.name,
-        barcode: presentationForm.barcode || undefined,
+        presentation_type_id: selectedType.id,
+        name: selectedType.name,
         conversion_factor: Number(presentationForm.conversion_factor || 1),
         unit_price: Number(presentationForm.unit_price || 0),
         cost_price: presentationForm.cost_price ? Number(presentationForm.cost_price) : undefined,
@@ -345,6 +381,51 @@ export default function Products() {
   };
 
   const products = productsData?.products || [];
+  const pagination = productsData?.pagination;
+  const totalProducts = pagination?.total ?? products.length;
+  const totalPages = Math.max(pagination?.totalPages ?? 1, 1);
+  const pageStart = totalProducts === 0 ? 0 : ((pagination?.page ?? currentPage) - 1) * (pagination?.limit ?? PRODUCTS_PAGE_SIZE) + 1;
+  const pageEnd = Math.min((pagination?.page ?? currentPage) * (pagination?.limit ?? PRODUCTS_PAGE_SIZE), totalProducts);
+  const productStats = productsData?.stats ?? {
+    total: totalProducts,
+    active: 0,
+    inactive: 0,
+    lowStock: 0,
+    expiring: 0,
+    withBonus: 0,
+  };
+
+  useEffect(() => {
+    if (pagination && currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, pagination, totalPages]);
+
+  useEffect(() => {
+    const updateTableScrollWidth = () => {
+      const scrollWidth = tableScrollRef.current?.scrollWidth || 0;
+      setProductTableScrollWidth(scrollWidth);
+    };
+
+    updateTableScrollWidth();
+    window.addEventListener('resize', updateTableScrollWidth);
+
+    return () => window.removeEventListener('resize', updateTableScrollWidth);
+  }, [products.length]);
+
+  const syncProductTableScroll = (source: 'top' | 'bottom') => {
+    if (syncingTableScrollRef.current) return;
+
+    const from = source === 'top' ? tableTopScrollRef.current : tableScrollRef.current;
+    const to = source === 'top' ? tableScrollRef.current : tableTopScrollRef.current;
+    if (!from || !to) return;
+
+    syncingTableScrollRef.current = true;
+    to.scrollLeft = from.scrollLeft;
+    window.requestAnimationFrame(() => {
+      syncingTableScrollRef.current = false;
+    });
+  };
 
   const getExpirationClass = (dateStr: string | undefined): string => {
     if (!dateStr) return '';
@@ -357,23 +438,9 @@ export default function Products() {
     return days <= 30 ? 'expiration-soon' : '';
   };
 
-  const productStats = products.reduce(
-    (acc, product) => {
-      const stock = Number(product.stock || 0);
-      const minStock = Number(product.min_stock || 0);
-      const isLowStock = minStock > 0 && stock <= minStock;
-      const hasBonus = Boolean(product.has_sales_bonus) && Number(product.sales_bonus_per_unit || 0) > 0;
-      const isActive = product.is_active === undefined || product.is_active === 1;
-      const isExpiring = product.expiration_date ? getExpirationClass(product.expiration_date) === 'expiration-soon' : false;
-      if (isActive) acc.active += 1;
-      if (!isActive) acc.inactive += 1;
-      if (isLowStock) acc.lowStock += 1;
-      if (isExpiring) acc.expiring += 1;
-      if (hasBonus) acc.withBonus += 1;
-      return acc;
-    },
-    { active: 0, inactive: 0, lowStock: 0, expiring: 0, withBonus: 0 }
-  );
+  const setQuickProductFilter = (filter: ProductsQuickFilter) => {
+    setQuickFilter(filter);
+  };
 
   return (
     <div className="page-container">
@@ -399,42 +466,54 @@ export default function Products() {
       </div>
 
       <div className="products-summary-grid">
-        <div className="product-summary-card summary-blue">
+        <button
+          type="button"
+          className={`product-summary-card summary-blue ${quickFilter === 'all' ? 'active' : ''}`}
+          onClick={() => setQuickProductFilter('all')}
+        >
           <span><Boxes size={15} /></span>
           <div>
-            <strong>{products.length}</strong>
+            <strong>{productStats.total}</strong>
             <small>Registrados</small>
           </div>
-        </div>
-        <div className="product-summary-card summary-green">
+        </button>
+        <button
+          type="button"
+          className={`product-summary-card summary-green ${quickFilter === 'active' ? 'active' : ''}`}
+          onClick={() => setQuickProductFilter('active')}
+        >
           <span><ShieldCheck size={15} /></span>
           <div>
             <strong>{productStats.active}</strong>
             <small>Activos</small>
           </div>
-        </div>
-        <div className="product-summary-card summary-amber">
+        </button>
+        <button
+          type="button"
+          className={`product-summary-card summary-amber ${quickFilter === 'low_stock' ? 'active' : ''}`}
+          onClick={() => setQuickProductFilter('low_stock')}
+        >
           <span><AlertTriangle size={15} /></span>
           <div>
             <strong>{productStats.lowStock}</strong>
             <small>Stock bajo</small>
           </div>
-        </div>
-        <div className="product-summary-card summary-teal">
+        </button>
+        <button
+          type="button"
+          className={`product-summary-card summary-teal ${quickFilter === 'bonus' ? 'active' : ''}`}
+          onClick={() => setQuickProductFilter('bonus')}
+        >
           <span><BadgeDollarSign size={15} /></span>
           <div>
             <strong>{productStats.withBonus}</strong>
             <small>Con bono</small>
           </div>
-        </div>
+        </button>
       </div>
 
-      <div className="filters-container">
-        <div className="filters-header">
-          <Filter size={20} />
-          <span>Filtros</span>
-        </div>
-        <div className="filters">
+      <div className="filters-container products-filters-card">
+        <div className="filters products-filters-grid">
           <div className="search-box">
             <Search size={20} />
             <input
@@ -444,16 +523,14 @@ export default function Products() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <div className="filter-group">
-            <label>Categoría</label>
+          <div className="filter-group products-filter-control">
             <CategoryFilterSearch
               categories={categories || []}
               selectedId={categoryFilter}
               onSelect={setCategoryFilter}
             />
           </div>
-          <div className="filter-group">
-            <label>Estado</label>
+          <div className="filter-group products-filter-control">
             <select
               value={statusFilter !== undefined ? statusFilter : ''}
               onChange={(e) => setStatusFilter(e.target.value !== '' ? Number(e.target.value) : undefined)}
@@ -471,13 +548,26 @@ export default function Products() {
           <Package size={64} />
           <h3>No se encontraron productos</h3>
           <p>
-            {search || categoryFilter || statusFilter !== undefined
+            {search || categoryFilter || statusFilter !== undefined || quickFilter !== 'all'
               ? 'Intenta ajustar los filtros de búsqueda'
               : 'Comienza agregando tu primer producto'}
           </p>
         </div>
       ) : (
-        <div className="table-container">
+        <div className="products-table-shell">
+          <div
+            className="products-table-top-scroll"
+            ref={tableTopScrollRef}
+            onScroll={() => syncProductTableScroll('top')}
+            aria-hidden="true"
+          >
+            <div style={{ width: productTableScrollWidth || '100%' }} />
+          </div>
+          <div
+            className="table-container products-table-scroll"
+            ref={tableScrollRef}
+            onScroll={() => syncProductTableScroll('bottom')}
+          >
           <table>
             <thead>
               <tr>
@@ -605,6 +695,31 @@ export default function Products() {
               ))}
             </tbody>
           </table>
+          </div>
+          <div className="products-pagination">
+            <div className="products-pagination-info">
+              Mostrando {pageStart} - {pageEnd} de {totalProducts} productos
+            </div>
+            <div className="products-pagination-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
+                disabled={currentPage <= 1}
+              >
+                Anterior
+              </button>
+              <span>Página {currentPage} de {totalPages}</span>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
+                disabled={currentPage >= totalPages}
+              >
+                Siguiente
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -641,17 +756,13 @@ export default function Products() {
                 </div>
                 <div className="form-group">
                   <label>Categoría</label>
-                  <select
-                    value={formData.category_id}
-                    onChange={(e) => setFormData({ ...formData, category_id: e.target.value })}
-                  >
-                    <option value="">Sin categoría</option>
-                    {categories?.map((cat) => (
-                      <option key={cat.id} value={cat.id}>
-                        {cat.name}
-                      </option>
-                    ))}
-                  </select>
+                  <CategoryFilterSearch
+                    categories={categories || []}
+                    selectedId={formData.category_id ? Number(formData.category_id) : undefined}
+                    onSelect={(categoryId) => setFormData({ ...formData, category_id: categoryId ? String(categoryId) : '' })}
+                    placeholder="Buscar categoría..."
+                    emptyLabel="Sin categoría"
+                  />
                 </div>
               </div>
               <div className="form-row">
@@ -785,7 +896,6 @@ export default function Products() {
                   <thead>
                     <tr>
                       <th>Presentación</th>
-                      <th>Código</th>
                       <th>Factor</th>
                       <th>Precio Venta</th>
                       <th>Costo</th>
@@ -802,7 +912,6 @@ export default function Products() {
                             <strong>{presentation.name}</strong>
                             {presentation.type_name && <small className="table-subtext">{presentation.type_name}</small>}
                           </td>
-                          <td>{presentation.barcode || '-'}</td>
                           <td>{presentation.conversion_factor} und.</td>
                           <td>S/ {Number(presentation.unit_price || 0).toFixed(2)}</td>
                           <td>{presentation.cost_price ? `S/ ${Number(presentation.cost_price).toFixed(2)}` : '-'}</td>
@@ -837,7 +946,7 @@ export default function Products() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={8} className="empty-message">Este producto aún no tiene presentaciones configuradas.</td>
+                        <td colSpan={7} className="empty-message">Este producto aún no tiene presentaciones configuradas.</td>
                       </tr>
                     )}
                   </tbody>
@@ -852,38 +961,21 @@ export default function Products() {
                     <select
                       value={presentationForm.presentation_type_id}
                       onChange={(e) => {
-                        const selectedType = presentationTypes.find((type) => type.id === Number(e.target.value));
                         setPresentationForm({
                           ...presentationForm,
                           presentation_type_id: e.target.value,
-                          name: presentationForm.name || selectedType?.name || '',
                         });
                       }}
+                      required
                     >
                       <option value="">Seleccionar tipo</option>
-                      {presentationTypes.map((type) => (
+                      {activePresentationTypes.map((type) => (
                         <option key={type.id} value={type.id}>{type.name}</option>
                       ))}
                     </select>
                   </div>
-                  <div className="form-group">
-                    <label>Nombre *</label>
-                    <input
-                      value={presentationForm.name}
-                      onChange={(e) => setPresentationForm({ ...presentationForm, name: e.target.value })}
-                      placeholder="Ej. Caja x 12"
-                      required
-                    />
-                  </div>
                 </div>
                 <div className="form-row">
-                  <div className="form-group">
-                    <label>Código</label>
-                    <input
-                      value={presentationForm.barcode}
-                      onChange={(e) => setPresentationForm({ ...presentationForm, barcode: e.target.value })}
-                    />
-                  </div>
                   <div className="form-group">
                     <label>Factor stock *</label>
                     <input
@@ -1146,22 +1238,12 @@ export default function Products() {
                   }} 
                 />
                 {qrData.qrUrl && (
-                  <div style={{ marginTop: '1rem' }}>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-light)', marginBottom: '0.5rem' }}>
+                  <div className="product-qr-url-block">
+                    <p className="product-qr-url-label">
                       URL del código QR:
                     </p>
-                    <div style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '0.5rem',
-                      padding: '0.5rem',
-                      backgroundColor: 'var(--bg-secondary)',
-                      borderRadius: '6px',
-                      fontSize: '0.85rem',
-                      fontFamily: 'monospace',
-                      wordBreak: 'break-all'
-                    }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>{qrData.qrUrl}</span>
+                    <div className="product-qr-url-value">
+                      <span>{qrData.qrUrl}</span>
                       <button
                         onClick={() => {
                           navigator.clipboard.writeText(qrData.qrUrl || '');

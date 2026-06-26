@@ -3,6 +3,7 @@ import { body, validationResult, query } from 'express-validator';
 import { db } from '../database/init';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import * as XLSX from 'xlsx';
+import { getLocalDateTime } from '../utils/dateTime';
 
 const router = express.Router();
 
@@ -60,29 +61,129 @@ function movementAmounts(previousBalance: number, movement: MovementRow) {
 // Get all inventory items
 router.get('/', [
   query('low_stock').optional().isBoolean(),
+  query('search').optional(),
+  query('category').optional(),
+  query('status').optional().isIn(['low', 'normal', 'high']),
+  query('quick_filter').optional().isIn(['low', 'high', 'value']),
+  query('all').optional().isBoolean(),
+  query('page').optional().isInt(),
+  query('limit').optional().isInt(),
 ], (req, res) => {
-  const { low_stock } = req.query;
+  const { low_stock, search, category, status, quick_filter, all, page = 1, limit = 50 } = req.query;
+  const pageNumber = Math.max(Number(page) || 1, 1);
+  const pageLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const offset = (pageNumber - 1) * pageLimit;
 
   let query = `
-    SELECT i.*, p.name as product_name, p.barcode, p.unit_price,
+    SELECT i.*, p.name as product_name, p.barcode, p.laboratory, p.unit_price,
            c.name as category_name
     FROM inventory i
     INNER JOIN products p ON i.product_id = p.id
     LEFT JOIN categories c ON p.category_id = c.id
     WHERE p.is_active = 1
   `;
+  const params: any[] = [];
 
-  if (low_stock === 'true') {
-    query += ' AND i.quantity <= i.min_stock';
-  }
+  const addInventoryFilters = (sql: string, values: any[], includeQuickFilter: boolean) => {
+    let nextSql = sql;
+
+    if (low_stock === 'true') {
+      nextSql += ' AND i.quantity <= i.min_stock';
+    }
+
+    if (search) {
+      nextSql += ` AND (
+        p.name LIKE ? OR p.barcode LIKE ? OR c.name LIKE ? OR i.location LIKE ?
+      )`;
+      const searchTerm = `%${search}%`;
+      values.push(searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+
+    if (category) {
+      nextSql += ' AND c.name LIKE ?';
+      values.push(`%${category}%`);
+    }
+
+    const requestedStatus = status || (includeQuickFilter && quick_filter !== 'value' ? quick_filter : '');
+    if (requestedStatus === 'low') {
+      nextSql += ' AND i.quantity <= i.min_stock';
+    } else if (requestedStatus === 'high') {
+      nextSql += ' AND i.max_stock > 0 AND i.quantity >= i.max_stock';
+    } else if (requestedStatus === 'normal') {
+      nextSql += ' AND NOT (i.quantity <= i.min_stock) AND NOT (i.max_stock > 0 AND i.quantity >= i.max_stock)';
+    }
+
+    if (includeQuickFilter && quick_filter === 'value') {
+      nextSql += ' AND COALESCE(i.quantity, 0) * COALESCE(p.unit_price, 0) > 0';
+    }
+
+    return nextSql;
+  };
+
+  query = addInventoryFilters(query, params, true);
 
   query += ' ORDER BY p.name';
+  if (all !== 'true') {
+    query += ' LIMIT ? OFFSET ?';
+    params.push(pageLimit, offset);
+  }
 
-  db.all(query, [], (err, inventory) => {
+  db.all(query, params, (err, inventory) => {
     if (err) {
       return res.status(500).json({ error: 'Database error' });
     }
-    res.json(inventory);
+
+    let countQuery = `
+      SELECT COUNT(*) as total
+      FROM inventory i
+      INNER JOIN products p ON i.product_id = p.id
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.is_active = 1
+    `;
+    const countParams: any[] = [];
+    countQuery = addInventoryFilters(countQuery, countParams, true);
+
+    db.get(countQuery, countParams, (countErr, countResult: any) => {
+      if (countErr) {
+        return res.status(500).json({ error: 'Database error' });
+      }
+
+      let statsQuery = `
+        SELECT
+          COUNT(*) as total,
+          COALESCE(SUM(CASE WHEN i.quantity <= i.min_stock THEN 1 ELSE 0 END), 0) as lowStock,
+          COALESCE(SUM(CASE WHEN i.max_stock > 0 AND i.quantity >= i.max_stock THEN 1 ELSE 0 END), 0) as highStock,
+          COALESCE(SUM(COALESCE(i.quantity, 0) * COALESCE(p.unit_price, 0)), 0) as inventoryValue
+        FROM inventory i
+        INNER JOIN products p ON i.product_id = p.id
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE p.is_active = 1
+      `;
+      const statsParams: any[] = [];
+      statsQuery = addInventoryFilters(statsQuery, statsParams, false);
+
+      db.get(statsQuery, statsParams, (statsErr, stats: any) => {
+        if (statsErr) {
+          return res.status(500).json({ error: 'Database error' });
+        }
+
+        res.json({
+          inventory,
+          pagination: {
+            page: pageNumber,
+            limit: pageLimit,
+            total: Number(countResult?.total || 0),
+            totalPages: Math.ceil(Number(countResult?.total || 0) / pageLimit),
+          },
+          stats: {
+            total: Number(stats?.total || 0),
+            lowStock: Number(stats?.lowStock || 0),
+            highStock: Number(stats?.highStock || 0),
+            inventoryValue: Number(stats?.inventoryValue || 0),
+          },
+        });
+      });
+    });
   });
 });
 
@@ -137,7 +238,8 @@ router.put('/:id', authenticateToken, [
     params.push(location);
   }
 
-  updates.push('last_updated = CURRENT_TIMESTAMP');
+  updates.push('last_updated = ?');
+  params.push(getLocalDateTime());
   params.push(id);
 
   db.run(
@@ -201,10 +303,12 @@ router.post('/movement', authenticateToken, [
       return res.status(400).json({ error: 'Tipo de ajuste invalido' });
     }
 
+    const createdAt = getLocalDateTime();
+
     // Update inventory
     db.run(
-      'UPDATE inventory SET quantity = ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-      [newQuantity, product_id],
+      'UPDATE inventory SET quantity = ?, last_updated = ? WHERE product_id = ?',
+      [newQuantity, createdAt, product_id],
       (err) => {
         if (err) {
           return res.status(500).json({ error: 'Database error' });
@@ -214,9 +318,9 @@ router.post('/movement', authenticateToken, [
         const referencePrefix = normalizedMovementType === 'adjustment_positive' ? 'AJP' : 'AJN';
         const adjustmentReference = reference_number || `${referencePrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
         db.run(
-          `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, notes, user_id)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [product_id, normalizedMovementType, movementQuantity, adjustmentReference, notes || null, req.user?.id || null],
+          `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, notes, user_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [product_id, normalizedMovementType, movementQuantity, adjustmentReference, notes || null, req.user?.id || null, createdAt],
           function(err) {
             if (err) {
               return res.status(500).json({ error: 'Database error' });
@@ -527,9 +631,11 @@ router.post('/import', authenticateToken, [
               const quantityToAdd = Math.max(0, quantity);
               const newQuantity = currentQty + quantityToAdd;
 
+              const importCreatedAt = getLocalDateTime();
+
               db.run(
-                'UPDATE inventory SET quantity = ?, min_stock = ?, max_stock = ?, location = ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-                [newQuantity, min_stock || 0, max_stock != null && !isNaN(max_stock) ? max_stock : null, location || null, product_id],
+                'UPDATE inventory SET quantity = ?, min_stock = ?, max_stock = ?, location = ?, last_updated = ? WHERE product_id = ?',
+                [newQuantity, min_stock || 0, max_stock != null && !isNaN(max_stock) ? max_stock : null, location || null, importCreatedAt, product_id],
                 (updateErr) => {
                   if (updateErr) {
                     results.errors.push(`Fila ${rowNum}: Error al actualizar inventario - ${updateErr.message}`);
@@ -538,8 +644,8 @@ router.post('/import', authenticateToken, [
                   }
                   // Record movement as "entry" for audit
                   db.run(
-                    'INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, notes, user_id) VALUES (?, ?, ?, ?, ?, ?)',
-                    [product_id, 'entry', quantityToAdd, importReference, 'Carga inicial desde Excel', req.user?.id || null],
+                    'INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, notes, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    [product_id, 'entry', quantityToAdd, importReference, 'Carga inicial desde Excel', req.user?.id || null, importCreatedAt],
                     () => {
                       results.success++;
                       resolve();
@@ -549,17 +655,19 @@ router.post('/import', authenticateToken, [
               );
             } else {
               // Insert new inventory entry
+              const importCreatedAt = getLocalDateTime();
+
               db.run(
-                'INSERT INTO inventory (product_id, quantity, min_stock, max_stock, location, last_updated) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
-                [product_id, quantity, min_stock || 0, max_stock != null && !isNaN(max_stock) ? max_stock : null, location || null],
+                'INSERT INTO inventory (product_id, quantity, min_stock, max_stock, location, last_updated) VALUES (?, ?, ?, ?, ?, ?)',
+                [product_id, quantity, min_stock || 0, max_stock != null && !isNaN(max_stock) ? max_stock : null, location || null, importCreatedAt],
                 function(insertErr) {
                   if (insertErr) {
                     results.errors.push(`Fila ${rowNum}: Error al insertar inventario - ${insertErr.message}`);
                     resolve();
                   } else {
                     db.run(
-                      'INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, notes, user_id) VALUES (?, ?, ?, ?, ?, ?)',
-                      [product_id, 'entry', Math.max(0, quantity), importReference, 'Carga inicial desde Excel', req.user?.id || null],
+                      'INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, notes, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                      [product_id, 'entry', Math.max(0, quantity), importReference, 'Carga inicial desde Excel', req.user?.id || null, importCreatedAt],
                       () => {
                         results.success++;
                         resolve();

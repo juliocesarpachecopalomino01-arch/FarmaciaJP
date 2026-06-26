@@ -49,6 +49,7 @@ export interface ProductFilters {
   search?: string;
   category_id?: number;
   is_active?: number;
+  quick_filter?: 'active' | 'low_stock' | 'bonus';
   page?: number;
   limit?: number;
 }
@@ -60,6 +61,14 @@ export interface ProductsResponse {
     limit: number;
     total: number;
     totalPages: number;
+  };
+  stats?: {
+    total: number;
+    active: number;
+    inactive: number;
+    lowStock: number;
+    expiring: number;
+    withBonus: number;
   };
 }
 

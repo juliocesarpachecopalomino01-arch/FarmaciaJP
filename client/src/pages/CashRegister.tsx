@@ -275,7 +275,7 @@ export default function CashRegisterPage() {
     const cashMethodValues = new Set(paymentMethods.filter((method) => method.is_cash === 1).map((method) => method.value));
     const cashSales = (currentCashSales?.sales || []).filter((s: Sale) => {
       const isCash = cashMethodValues.size > 0 ? cashMethodValues.has(s.payment_method) : s.payment_method === 'cash';
-      return isCash && s.status !== 'returned';
+      return isCash && s.status !== 'cancelled';
     });
 
     const totalCashSales = cashSales.reduce((sum: number, s: Sale) => sum + (s.final_amount || 0), 0);
@@ -301,8 +301,6 @@ export default function CashRegisterPage() {
     return account.account_type === 'both' || account.account_type === manualMovementForm.movement_type;
   });
 
-  const recentCashMovements = currentCashMovements.slice(0, 6);
-
   const formatAccountingDate = (isoDate: string) => {
     try {
       const [y, m, d] = isoDate.split('-');
@@ -311,6 +309,13 @@ export default function CashRegisterPage() {
     } catch {
       return isoDate;
     }
+  };
+
+  const getAuditResult = (diff: number | null) => {
+    if (diff === null) return { label: '-', className: '' };
+    if (diff > 0) return { label: 'A favor', className: 'badge badge-warning' };
+    if (diff < 0) return { label: 'En contra', className: 'badge badge-danger' };
+    return { label: 'Cuadrado', className: 'badge badge-success' };
   };
 
   const formatSqliteDateTime = (value?: string | null) => {
@@ -424,34 +429,6 @@ export default function CashRegisterPage() {
           </div>
         )}
       </div>
-
-      {hasOpenCashRegister && (
-        <div className="cash-register-card cash-extra-panel">
-          <div className="cash-extra-summary">
-            <div>
-              <span className="cash-extra-label">Otros movimientos</span>
-              <strong className={cashMovementsTotal < 0 ? 'cash-amount-negative' : 'cash-amount-positive'}>
-                S/ {cashMovementsTotal.toFixed(2)}
-              </strong>
-            </div>
-            <small>Ingresos y salidas manuales, compras y devoluciones asociadas a esta caja.</small>
-          </div>
-          <div className="cash-extra-list">
-            {recentCashMovements.length === 0 ? (
-              <span className="cash-extra-empty">Sin movimientos adicionales</span>
-            ) : (
-              recentCashMovements.map((movement) => (
-                <div key={movement.id} className="cash-extra-item">
-                  <span>{movement.cash_account_name || movement.description || movement.movement_type}</span>
-                  <strong className={Number(movement.amount) < 0 ? 'cash-amount-negative' : 'cash-amount-positive'}>
-                    {Number(movement.amount) < 0 ? '-' : '+'}S/ {Math.abs(Number(movement.amount || 0)).toFixed(2)}
-                  </strong>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
 
       {showManualMovementModal && currentCashRegister && (
         <div className="modal-overlay" onClick={() => { setShowManualMovementModal(false); resetManualMovementForm(); }}>
@@ -1056,6 +1033,7 @@ export default function CashRegisterPage() {
                     <th>Monto Calculado</th>
                     <th>Monto Entregado</th>
                     <th>Diferencia</th>
+                    <th>Resultado</th>
                     <th>Acción</th>
                   </tr>
                 </thead>
@@ -1068,6 +1046,7 @@ export default function CashRegisterPage() {
                         ? null
                         : Number(cr.closing_balance);
                       const diff = delivered === null ? null : delivered - expected;
+                      const auditResult = getAuditResult(diff);
                       const isSelected = selectedClosedCash?.id === cr.id;
 
                       return (
@@ -1089,6 +1068,13 @@ export default function CashRegisterPage() {
                             {diff === null ? '-' : `S/ ${diff.toFixed(2)}`}
                           </td>
                           <td>
+                            {auditResult.className ? (
+                              <span className={auditResult.className}>{auditResult.label}</span>
+                            ) : (
+                              auditResult.label
+                            )}
+                          </td>
+                          <td>
                             <button
                               type="button"
                               className="btn-secondary"
@@ -1104,7 +1090,7 @@ export default function CashRegisterPage() {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={7} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-light)' }}>
+                      <td colSpan={8} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-light)' }}>
                         {cashRegistersList ? 'No hay cajas cerradas para mostrar.' : 'Cargando cajas...'}
                       </td>
                     </tr>

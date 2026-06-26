@@ -1,12 +1,14 @@
-﻿import { useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
-import { inventoryApi, InventoryItem, InventoryMovementRequest } from '../api/inventory';
+import { inventoryApi, InventoryItem, InventoryMovementRequest, InventoryQuickFilter } from '../api/inventory';
 import { productsApi } from '../api/products';
 import { categoriesApi, Category } from '../api/categories';
 import { buildApiUrl } from '../api/client';
 import { printInventoryAdjustmentReceipt, printInventoryInitialLoadReceipt } from '../utils/printReceipt';
-import { Plus, Package, Edit, Upload, Download, Filter, Search, Boxes, AlertTriangle, TrendingUp, Wallet } from 'lucide-react';
+import { Plus, Edit, Upload, Download, Search, Boxes, AlertTriangle, TrendingUp, Wallet } from 'lucide-react';
 import './Inventory.css';
+
+const INVENTORY_PAGE_SIZE = 100;
 
 type CategorySearchProps = {
   categories: Category[];
@@ -111,6 +113,8 @@ export default function Inventory() {
     category: '',
     status: '',
   });
+  const [quickFilter, setQuickFilter] = useState<InventoryQuickFilter>('all');
+  const [currentPage, setCurrentPage] = useState(1);
   const [movementForm, setMovementForm] = useState({
     product_id: '',
     movement_type: 'adjustment_negative' as InventoryMovementRequest['movement_type'],
@@ -126,9 +130,23 @@ export default function Inventory() {
 
   const queryClient = useQueryClient();
 
-  const { data: inventory } = useQuery('inventory', () => inventoryApi.getAll());
+  const { data: inventoryData } = useQuery(['inventory', filters, quickFilter, currentPage], () =>
+    inventoryApi.getPaged({
+      search: filters.search,
+      category: filters.category,
+      status: filters.status,
+      quick_filter: quickFilter === 'all' ? undefined : quickFilter,
+      page: currentPage,
+      limit: INVENTORY_PAGE_SIZE,
+    })
+    , { keepPreviousData: true }
+  );
   const { data: productsData } = useQuery('products', () => productsApi.getAll({ limit: 1000 }));
   const { data: categories } = useQuery('categories', () => categoriesApi.getAll());
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters.search, filters.category, filters.status, quickFilter]);
 
   const movementMutation = useMutation(inventoryApi.addMovement, {
     onSuccess: async (data) => {
@@ -226,32 +244,28 @@ export default function Inventory() {
     }
   };
 
-  const inventoryItems = inventory || [];
+  const inventoryItems = inventoryData?.inventory || [];
+  const pagination = inventoryData?.pagination;
+  const totalInventoryItems = pagination?.total ?? inventoryItems.length;
+  const totalPages = Math.max(pagination?.totalPages ?? 1, 1);
+  const pageStart = totalInventoryItems === 0 ? 0 : ((pagination?.page ?? currentPage) - 1) * (pagination?.limit ?? INVENTORY_PAGE_SIZE) + 1;
+  const pageEnd = Math.min((pagination?.page ?? currentPage) * (pagination?.limit ?? INVENTORY_PAGE_SIZE), totalInventoryItems);
+  const inventoryStats = inventoryData?.stats ?? {
+    total: totalInventoryItems,
+    lowStock: 0,
+    highStock: 0,
+    inventoryValue: 0,
+  };
   const isPositiveAdjustment = movementForm.movement_type === 'adjustment_positive';
   const adjustmentQuantityLabel = isPositiveAdjustment ? 'Cantidad a ingresar *' : 'Cantidad a descontar *';
   const adjustmentQuantityPlaceholder = isPositiveAdjustment ? 'Unidades que se sumarán al stock' : 'Unidades que se descontarán del stock';
   const adjustmentButtonLabel = isPositiveAdjustment ? 'Registrar e Imprimir Ajuste Positivo' : 'Registrar e Imprimir Ajuste Negativo';
-  const lowStockItems = inventoryItems.filter((item) => item.quantity <= item.min_stock);
-  const highStockItems = inventoryItems.filter((item) => item.max_stock > 0 && item.quantity >= item.max_stock);
-  const inventoryValue = inventoryItems.reduce((total, item) => total + (Number(item.quantity || 0) * Number(item.unit_price || 0)), 0);
-  const filteredInventory = useMemo(() => {
-    const search = filters.search.trim().toLowerCase();
-    return (inventory || []).filter((item) => {
-      const isLow = item.quantity <= item.min_stock;
-      const isHigh = item.max_stock > 0 && item.quantity >= item.max_stock;
-      const status = isLow ? 'low' : isHigh ? 'high' : 'normal';
-      const matchesSearch = !search || [
-        item.product_name,
-        item.barcode,
-        item.category_name,
-        item.location,
-      ].some((value) => String(value || '').toLowerCase().includes(search));
-      const categorySearch = filters.category.trim().toLowerCase();
-      const matchesCategory = !categorySearch || String(item.category_name || '').toLowerCase().includes(categorySearch);
-      const matchesStatus = !filters.status || status === filters.status;
-      return matchesSearch && matchesCategory && matchesStatus;
-    });
-  }, [inventory, filters]);
+
+  useEffect(() => {
+    if (pagination && currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, pagination, totalPages]);
 
   return (
     <div className="page-container">
@@ -276,54 +290,56 @@ export default function Inventory() {
         </div>
       </div>
 
-      {lowStockItems.length > 0 && (
-        <div className="alert alert-warning">
-          <Package size={20} />
-          <div>
-            <strong>Alerta de Stock Bajo</strong>
-            <p>{lowStockItems.length} producto(s) con stock por debajo del mínimo</p>
-          </div>
-        </div>
-      )}
-
       <div className="inventory-summary-grid">
-        <div className="inventory-summary-card summary-blue">
+        <button
+          type="button"
+          className={`inventory-summary-card summary-blue ${quickFilter === 'all' ? 'active' : ''}`}
+          onClick={() => setQuickFilter('all')}
+        >
           <span className="summary-icon"><Boxes size={15} /></span>
           <div>
-            <strong>{inventoryItems.length}</strong>
+            <strong>{inventoryStats.total}</strong>
             <small>Total productos</small>
           </div>
-        </div>
-        <div className="inventory-summary-card summary-amber">
+        </button>
+        <button
+          type="button"
+          className={`inventory-summary-card summary-amber ${quickFilter === 'low' ? 'active' : ''}`}
+          onClick={() => setQuickFilter('low')}
+        >
           <span className="summary-icon"><AlertTriangle size={15} /></span>
           <div>
-            <strong>{lowStockItems.length}</strong>
+            <strong>{inventoryStats.lowStock}</strong>
             <small>Stock bajo</small>
           </div>
-        </div>
-        <div className="inventory-summary-card summary-green">
+        </button>
+        <button
+          type="button"
+          className={`inventory-summary-card summary-green ${quickFilter === 'high' ? 'active' : ''}`}
+          onClick={() => setQuickFilter('high')}
+        >
           <span className="summary-icon"><TrendingUp size={15} /></span>
           <div>
-            <strong>{highStockItems.length}</strong>
+            <strong>{inventoryStats.highStock}</strong>
             <small>Stock alto</small>
           </div>
-        </div>
-        <div className="inventory-summary-card summary-teal">
+        </button>
+        <button
+          type="button"
+          className={`inventory-summary-card summary-teal ${quickFilter === 'value' ? 'active' : ''}`}
+          onClick={() => setQuickFilter('value')}
+        >
           <span className="summary-icon"><Wallet size={15} /></span>
           <div>
-            <strong>S/ {inventoryValue.toFixed(2)}</strong>
+            <strong>S/ {inventoryStats.inventoryValue.toFixed(2)}</strong>
             <small>Valor estimado</small>
           </div>
-        </div>
+        </button>
       </div>
 
       <div className="inventory-filters">
-        <div className="inventory-filters-title">
-          <Filter size={20} />
-          <strong>Filtros</strong>
-        </div>
         <div className="inventory-filters-grid">
-          <label className="inventory-search-field">
+          <div className="inventory-search-field">
             <Search size={20} />
             <input
               type="text"
@@ -331,17 +347,15 @@ export default function Inventory() {
               value={filters.search}
               onChange={(e) => setFilters({ ...filters, search: e.target.value })}
             />
-          </label>
-          <label>
-            Categoría
+          </div>
+          <div className="inventory-filter-control">
             <CategorySearch
               categories={categories || []}
               value={filters.category}
               onChange={(category) => setFilters({ ...filters, category })}
             />
-          </label>
-          <label>
-            Estado
+          </div>
+          <div className="inventory-filter-control">
             <select
               value={filters.status}
               onChange={(e) => setFilters({ ...filters, status: e.target.value })}
@@ -351,7 +365,7 @@ export default function Inventory() {
               <option value="normal">Normal</option>
               <option value="high">Alto</option>
             </select>
-          </label>
+          </div>
         </div>
       </div>
 
@@ -370,7 +384,7 @@ export default function Inventory() {
             </tr>
           </thead>
           <tbody>
-            {filteredInventory.map((item) => {
+            {inventoryItems.map((item) => {
               const isLow = item.quantity <= item.min_stock;
               const isHigh = item.max_stock > 0 && item.quantity >= item.max_stock;
               return (
@@ -407,7 +421,7 @@ export default function Inventory() {
                 </tr>
               );
             })}
-            {filteredInventory.length === 0 && (
+            {inventoryItems.length === 0 && (
               <tr>
                 <td colSpan={8} className="empty-table-message">
                   No hay productos para los filtros seleccionados.
@@ -416,6 +430,30 @@ export default function Inventory() {
             )}
           </tbody>
         </table>
+        <div className="inventory-pagination">
+          <div>
+            Mostrando {pageStart} - {pageEnd} de {totalInventoryItems} productos
+          </div>
+          <div className="inventory-pagination-actions">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
+              disabled={currentPage <= 1}
+            >
+              Anterior
+            </button>
+            <span>Página {currentPage} de {totalPages}</span>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setCurrentPage((page) => Math.min(page + 1, totalPages))}
+              disabled={currentPage >= totalPages}
+            >
+              Siguiente
+            </button>
+          </div>
+        </div>
       </div>
 
       {showMovementModal && (

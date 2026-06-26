@@ -75,12 +75,14 @@
 }
 
 .inventory-filters {
+  display: flex;
+  justify-content: center;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
-  padding: 1.25rem;
-  margin-bottom: 1.5rem;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
 }
 
 .inventory-filters-title {
@@ -97,9 +99,11 @@
 
 .inventory-filters-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 1.2fr) minmax(180px, 0.8fr) minmax(180px, 0.8fr);
-  gap: 1rem;
-  align-items: end;
+  width: min(1260px, 100%);
+  grid-template-columns: minmax(360px, 1.35fr) minmax(240px, 0.82fr) minmax(240px, 0.82fr);
+  gap: 0.65rem;
+  align-items: center;
+  justify-content: center;
 }
 
 .inventory-filters-grid label {
@@ -113,13 +117,14 @@
 .inventory-filters-grid input,
 .inventory-filters-grid select {
   width: 100%;
-  min-height: 3rem;
+  height: 36px !important;
+  min-height: 36px !important;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0 0.875rem;
+  padding: 0 0.75rem;
   background: var(--surface);
   color: var(--text);
-  font-size: 0.95rem;
+  font-size: 0.88rem;
 }
 
 .inventory-combobox {
@@ -173,23 +178,32 @@
 
 .inventory-search-field {
   position: relative;
-  display: block !important;
+  display: flex !important;
+  align-items: center;
+  min-width: 0;
 }
 
 .inventory-search-field svg {
   position: absolute;
-  left: 0.875rem;
-  bottom: 0.875rem;
+  left: 0.75rem;
   color: var(--text-light);
 }
 
 .inventory-search-field input {
-  padding-left: 2.75rem;
+  padding-left: 2.35rem;
+}
+
+.inventory-filter-control {
+  min-width: 0;
 }
 
 @media (max-width: 900px) {
   .inventory-filters-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .inventory-search-field {
+    grid-column: 1 / -1;
   }
 }
 
@@ -204,12 +218,27 @@
   display: flex;
   align-items: center;
   gap: 0.65rem;
+  width: 100%;
   min-height: 48px;
   padding: 0.65rem 0.75rem;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 8px;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.95));
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.inventory-summary-card:hover,
+.inventory-summary-card.active {
+  border-color: rgba(37, 99, 235, 0.45);
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.12);
+  transform: translateY(-1px);
+}
+
+.inventory-summary-card.active {
+  outline: 2px solid rgba(37, 99, 235, 0.16);
 }
 
 .inventory-summary-card .summary-icon {
@@ -272,6 +301,40 @@
   font-weight: 600;
 }
 
+.inventory-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0.8rem;
+  color: #475569;
+  font-size: 0.85rem;
+  font-weight: 650;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.inventory-pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.inventory-pagination-actions span {
+  min-width: 92px;
+  color: #0f172a;
+  text-align: center;
+}
+
+.inventory-pagination-actions .btn-secondary {
+  min-height: 34px;
+  padding: 0.45rem 0.75rem;
+}
+
+.inventory-pagination-actions .btn-secondary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 @media (max-width: 1100px) {
   .inventory-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -281,5 +344,18 @@
 @media (max-width: 640px) {
   .inventory-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .inventory-filters-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inventory-pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .inventory-pagination-actions {
+    justify-content: space-between;
   }
 }

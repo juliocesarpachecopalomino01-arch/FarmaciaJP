@@ -9,6 +9,7 @@ import Inventory from './pages/Inventory';
 import Sales from './pages/Sales';
 import CashRegisterPage from './pages/CashRegister';
 import CashMovements from './pages/CashMovements';
+import CashReports from './pages/CashReports';
 import Alerts from './pages/Alerts';
 import Customers from './pages/Customers';
 import Reports from './pages/Reports';
@@ -21,6 +22,7 @@ import PaymentMethods from './pages/PaymentMethods';
 import CompanySettingsPage from './pages/CompanySettings';
 import ProductQRPublic from './pages/ProductQRPublic';
 import ProductMovementsReport from './pages/ProductMovementsReport';
+import PresentationTypes from './pages/PresentationTypes';
 import Layout from './components/Layout';
 import './styles/compact-theme.css';
 
@@ -50,6 +52,7 @@ function App() {
         >
           <Route index element={<ModuleGuard><Dashboard /></ModuleGuard>} />
           <Route path="products" element={<ModuleGuard><Products /></ModuleGuard>} />
+          <Route path="presentation-types" element={<ModuleGuard><PresentationTypes /></ModuleGuard>} />
           <Route path="categories" element={<ModuleGuard><Categories /></ModuleGuard>} />
           <Route path="payment-methods" element={<ModuleGuard><PaymentMethods /></ModuleGuard>} />
           <Route path="company-settings" element={<ModuleGuard><CompanySettingsPage /></ModuleGuard>} />
@@ -57,6 +60,7 @@ function App() {
           <Route path="sales" element={<ModuleGuard><Sales /></ModuleGuard>} />
           <Route path="cash-register" element={<ModuleGuard><CashRegisterPage /></ModuleGuard>} />
           <Route path="cash-movements" element={<ModuleGuard><CashMovements /></ModuleGuard>} />
+          <Route path="cash-reports" element={<ModuleGuard><CashReports /></ModuleGuard>} />
           <Route path="product-movements" element={<ModuleGuard><ProductMovementsReport /></ModuleGuard>} />
           <Route path="alerts" element={<ModuleGuard><Alerts /></ModuleGuard>} />
           <Route path="customers" element={<ModuleGuard><Customers /></ModuleGuard>} />

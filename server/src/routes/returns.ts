@@ -1,9 +1,10 @@
-import express, { Response } from 'express';
+﻿import express, { Response } from 'express';
 import { body, validationResult, query } from 'express-validator';
 import { db } from '../database/init';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { logAction } from '../middleware/audit';
 import { getNonAdminHistoryDays } from '../utils/companySettings';
+import { getLocalDate, getLocalDateTime } from '../utils/dateTime';
 
 const router = express.Router();
 
@@ -51,19 +52,11 @@ function getOpenCashRegister(userId: number): Promise<{ id: number }> {
 }
 
 function getPeruDateString() {
-  const now = new Date();
-  const peruDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Lima' }));
-  return peruDate.toISOString().slice(0, 10);
+  return getLocalDate();
 }
 
 function getPeruDateStringOffset(daysOffset: number) {
-  const [year, month, day] = getPeruDateString().split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  date.setUTCDate(date.getUTCDate() + daysOffset);
-  const y = date.getUTCFullYear();
-  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const d = String(date.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return getLocalDate(daysOffset);
 }
 
 // Get all returns
@@ -202,10 +195,10 @@ router.post('/', authenticateToken, [
       if (err) return res.status(500).json({ error: 'Database error' });
       if (!sale) return res.status(404).json({ error: 'Sale not found' });
 
-      // Step 1: Validate same seller (usuario que vendió)
+      // Step 1: Validate same seller (usuario que vendiÃ³)
       if (sale.user_id !== req.user!.id) {
         return res.status(403).json({
-          error: 'Solo el vendedor que realizó la venta puede procesar la devolución.',
+          error: 'Solo el vendedor que realizÃ³ la venta puede procesar la devoluciÃ³n.',
         });
       }
 
@@ -223,7 +216,7 @@ router.post('/', authenticateToken, [
       // Step 1: Validate sale has cash register
       if (!sale.cash_register_id) {
         return res.status(400).json({
-          error: 'La venta no tiene una caja asociada. No se puede procesar la devolución.',
+          error: 'La venta no tiene una caja asociada. No se puede procesar la devoluciÃ³n.',
         });
       }
 
@@ -232,7 +225,7 @@ router.post('/', authenticateToken, [
         .then((openCash) => {
           if (openCash.id !== sale.cash_register_id) {
             return res.status(400).json({
-              error: `La devolución debe realizarse en la misma caja de la venta. Caja requerida: ${sale.cash_register_id}. Caja actual: ${openCash.id}.`,
+              error: `La devoluciÃ³n debe realizarse en la misma caja de la venta. Caja requerida: ${sale.cash_register_id}. Caja actual: ${openCash.id}.`,
               required_cash_register_id: sale.cash_register_id,
               current_cash_register_id: openCash.id,
             });
@@ -241,13 +234,13 @@ router.post('/', authenticateToken, [
           // Step 2: Require password to execute return
           if (!password) {
             return res.status(403).json({
-              error: 'Se requiere contraseña para efectuar la devolución.',
+              error: 'Se requiere contraseÃ±a para efectuar la devoluciÃ³n.',
               requires_password: true,
             });
           }
           getCompanyPassword('return_password', DEVOLUTION_PASSWORD).then((configuredPassword) => {
             if (password !== configuredPassword) {
-              return res.status(403).json({ error: 'Contraseña incorrecta.' });
+              return res.status(403).json({ error: 'ContraseÃ±a incorrecta.' });
             }
 
             proceedWithReturn();
@@ -324,11 +317,12 @@ router.post('/', authenticateToken, [
 
             validateItems()
               .then(() => {
+                const createdAt = getLocalDateTime();
                 // Create return
                 db.run(
-                  `INSERT INTO returns (return_number, sale_id, customer_id, user_id, cash_register_id, total_amount, reason, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [returnNumber, sale_id, sale.customer_id, req.user!.id, sale.cash_register_id, totalAmount, reason || null, notes || null],
+                  `INSERT INTO returns (return_number, sale_id, customer_id, user_id, cash_register_id, total_amount, reason, notes, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [returnNumber, sale_id, sale.customer_id, req.user!.id, sale.cash_register_id, totalAmount, reason || null, notes || null, createdAt],
                   function(err) {
                     if (err) {
                       return res.status(500).json({ error: 'Database error' });
@@ -352,16 +346,16 @@ router.post('/', authenticateToken, [
 
                           // Restore inventory
                           db.run(
-                            'UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-                            [item.stock_quantity, item.product_id],
+                            'UPDATE inventory SET quantity = quantity + ?, last_updated = ? WHERE product_id = ?',
+                            [item.stock_quantity, createdAt, item.product_id],
                             () => {}
                           );
 
                           // Record inventory movement
                           db.run(
-                            `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, notes)
-                             VALUES (?, 'entry', ?, ?, ?, ?)`,
-                            [item.product_id, item.stock_quantity, returnNumber, req.user!.id, 'Devolución de venta'],
+                            `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, notes, created_at)
+                             VALUES (?, 'entry', ?, ?, ?, ?, ?)`,
+                            [item.product_id, item.stock_quantity, returnNumber, req.user!.id, 'Devolución de venta', createdAt],
                             () => {}
                           );
 
@@ -402,19 +396,20 @@ router.post('/', authenticateToken, [
                                 }
 
                                 db.run(
-                                  `INSERT INTO cash_movements (cash_register_id, movement_type, amount, payment_method, reference_type, reference_id, description, user_id)
-                                   VALUES (?, 'return', ?, ?, 'return', ?, ?, ?)`,
+                                  `INSERT INTO cash_movements (cash_register_id, movement_type, amount, payment_method, reference_type, reference_id, description, user_id, created_at)
+                                   VALUES (?, 'return', ?, ?, 'return', ?, ?, ?, ?)`,
                                   [
                                     sale.cash_register_id,
                                     -Math.abs(totalAmount),
                                     sale.payment_method || null,
                                     returnId,
-                                    `Devolución ${returnNumber} de venta ${sale.sale_number}`,
+                                    `Devolucion ${returnNumber} de venta ${sale.sale_number}`,
                                     req.user!.id,
+                                    createdAt,
                                   ],
                                   (cashMovementErr) => {
                                     if (cashMovementErr) {
-                                      return res.status(500).json({ error: 'Error registrando movimiento de caja de la devolución' });
+                                      return res.status(500).json({ error: 'Error registrando movimiento de caja de la devolucion' });
                                     }
 
                                     // Log audit
@@ -450,3 +445,4 @@ router.post('/', authenticateToken, [
 });
 
 export default router;
+

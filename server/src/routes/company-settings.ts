@@ -44,6 +44,20 @@ router.get('/', authenticateToken, (_req, res) => {
   });
 });
 
+router.get('/public', (_req, res) => {
+  db.get('SELECT business_name, trade_name, logo_data_url, show_logo FROM company_settings WHERE id = 1', [], (err, row: any) => {
+    if (err) {
+      return res.status(500).json({ error: 'Database error' });
+    }
+    const settings = row || defaultSettings;
+    res.json({
+      business_name: settings.business_name || defaultSettings.business_name,
+      trade_name: settings.trade_name || defaultSettings.trade_name,
+      logo_data_url: Number(settings.show_logo ?? 1) === 1 ? settings.logo_data_url || null : null,
+    });
+  });
+});
+
 router.put('/', authenticateToken, requireRole('admin'), [
   body('business_name').optional().isString().isLength({ min: 1, max: 120 }),
   body('trade_name').optional().isString().isLength({ max: 120 }),

@@ -33,6 +33,11 @@ export const companySettingsApi = {
     return response.data;
   },
 
+  getPublic: async (): Promise<Pick<CompanySettings, 'business_name' | 'trade_name' | 'logo_data_url'>> => {
+    const response = await api.get<Pick<CompanySettings, 'business_name' | 'trade_name' | 'logo_data_url'>>('/company-settings/public');
+    return response.data;
+  },
+
   update: async (settings: CompanySettingsPayload): Promise<{ message: string }> => {
     const response = await api.put('/company-settings', settings);
     return response.data;

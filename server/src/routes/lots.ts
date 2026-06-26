@@ -2,6 +2,7 @@ import express from 'express';
 import { body, validationResult, query } from 'express-validator';
 import { db } from '../database/init';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { getLocalDateTime } from '../utils/dateTime';
 
 const router = express.Router();
 
@@ -52,10 +53,12 @@ router.post('/', authenticateToken, [
         return res.status(500).json({ error: 'Database error' });
       }
 
+      const updatedAt = getLocalDateTime();
+
       // Update inventory
       db.run(
-        'UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-        [quantity, product_id],
+        'UPDATE inventory SET quantity = quantity + ?, last_updated = ? WHERE product_id = ?',
+        [quantity, updatedAt, product_id],
         () => {}
       );
 
@@ -115,9 +118,10 @@ router.put('/:id', authenticateToken, [
 
         // Update inventory if quantity changed
         if (quantityDiff !== 0) {
+          const updatedAt = getLocalDateTime();
           db.run(
-            'UPDATE inventory SET quantity = quantity + ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-            [quantityDiff, lot.product_id],
+            'UPDATE inventory SET quantity = quantity + ?, last_updated = ? WHERE product_id = ?',
+            [quantityDiff, updatedAt, lot.product_id],
             () => {}
           );
         }
@@ -146,10 +150,12 @@ router.delete('/:id', authenticateToken, (req: AuthRequest, res) => {
         return res.status(500).json({ error: 'Database error' });
       }
 
+      const updatedAt = getLocalDateTime();
+
       // Update inventory
       db.run(
-        'UPDATE inventory SET quantity = quantity - ?, last_updated = CURRENT_TIMESTAMP WHERE product_id = ?',
-        [lot.quantity, lot.product_id],
+        'UPDATE inventory SET quantity = quantity - ?, last_updated = ? WHERE product_id = ?',
+        [lot.quantity, updatedAt, lot.product_id],
         () => {}
       );
 
