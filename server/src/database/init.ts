@@ -58,6 +58,18 @@ async function ensureColumns(table: string, columns: Array<[string, string]>): P
 }
 
 async function runCriticalMigrations(): Promise<void> {
+  await runDb(`
+    CREATE TABLE IF NOT EXISTS app_license (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      license_key TEXT NOT NULL,
+      customer TEXT,
+      expires_at TEXT,
+      machine_id TEXT,
+      activated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   await ensureColumns('users', [
     ['worker_id', 'INTEGER'],
     ['profile_id', 'INTEGER']

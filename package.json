@@ -1,7 +1,7 @@
 {
   "name": "farmacia-web-system",
   "version": "1.0.0",
-  "description": "Sistema de Farmacia Web Open Source y Dinámico",
+  "description": "Sistema de Farmacia Web con licencia privada",
   "main": "dist/server.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
@@ -20,10 +20,10 @@
     "pharmacy",
     "inventory",
     "sales",
-    "open-source"
+    "licensed"
   ],
   "author": "",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "devDependencies": {
     "concurrently": "^10.0.3"
   }

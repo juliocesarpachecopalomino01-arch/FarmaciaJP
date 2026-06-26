@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { useAuth } from './hooks/useAuth';
 import { ModuleGuard } from './components/ModuleGuard';
 import Login from './pages/Login';
+import LicenseActivation from './pages/LicenseActivation';
 import Dashboard from './pages/Dashboard';
 import Products from './pages/Products';
 import Categories from './pages/Categories';
@@ -41,6 +42,7 @@ function App() {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/license" element={<LicenseActivation />} />
         <Route path="/product-qr/:code" element={<ProductQRPublic />} />
         <Route
           path="/"

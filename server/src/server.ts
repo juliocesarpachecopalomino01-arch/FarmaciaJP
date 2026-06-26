@@ -26,6 +26,8 @@ import cashRegisterRoutes from './routes/cash-registers';
 import paymentMethodRoutes from './routes/payment-methods';
 import companySettingsRoutes from './routes/company-settings';
 import productPresentationRoutes from './routes/product-presentations';
+import licenseRoutes from './routes/license';
+import { requireValidLicense } from './middleware/license';
 
 dotenv.config();
 
@@ -39,6 +41,8 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/license', licenseRoutes);
+app.use('/api', requireValidLicense);
 app.use('/api/products', productRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/inventory', inventoryRoutes);
