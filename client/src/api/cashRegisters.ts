@@ -12,6 +12,9 @@ export interface CashRegister {
   total_sales?: number;
   total_amount?: number;
   cash_amount?: number;
+  yape_amount?: number;
+  visa_amount?: number;
+  digital_amount?: number;
   cash_movements_amount?: number;
   expected_cash_amount?: number;
   notes?: string | null;

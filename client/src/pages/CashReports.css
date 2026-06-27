@@ -1,5 +1,37 @@
+.cash-report-top-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 14px;
+  margin: 0 0 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.08), rgba(16, 185, 129, 0.08));
+}
+
+.cash-report-top-scroll > div {
+  width: 1680px;
+  height: 1px;
+}
+
+.cash-report-top-scroll::-webkit-scrollbar,
+.cash-report-table::-webkit-scrollbar {
+  height: 10px;
+}
+
+.cash-report-top-scroll::-webkit-scrollbar-thumb,
+.cash-report-table::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary), var(--success));
+}
+
+.cash-report-top-scroll::-webkit-scrollbar-track,
+.cash-report-table::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(191, 219, 254, 0.45);
+}
+
 .cash-report-table table {
-  min-width: 1160px;
+  min-width: 1680px;
 }
 
 .cash-report-table td,

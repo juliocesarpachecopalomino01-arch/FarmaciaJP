@@ -1,0 +1,8 @@
+﻿Sistema de Farmacia - Entregable Compilado
+
+1. Ejecutar INSTALAR_FARMACIA.cmd una sola vez.
+2. Ejecutar INICIAR_FARMACIA.cmd para abrir el sistema.
+3. Acceso local: http://localhost:3001
+4. Si aparece licencia requerida, solicita el codigo del equipo y activa la licencia.
+
+Este paquete no incluye codigo fuente.

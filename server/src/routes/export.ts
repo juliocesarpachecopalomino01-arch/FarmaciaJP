@@ -731,11 +731,12 @@ function isInventoryExitLike(type: string) {
 
 router.get('/inventory/movements/excel', authenticateToken, [
   query('product_id').optional().isInt(),
+  query('product_search').optional().isString(),
   query('movement_type').optional().isIn(['entry', 'exit', 'adjustment', 'adjustment_positive', 'adjustment_negative']),
   query('start_date').optional(),
   query('end_date').optional(),
 ], (req: AuthRequest, res) => {
-  const { product_id, movement_type, start_date, end_date } = req.query;
+  const { product_id, product_search, movement_type, start_date, end_date } = req.query;
 
   let sql = `
     SELECT im.created_at, p.name as product_name, p.barcode, c.name as category_name,
@@ -751,6 +752,15 @@ router.get('/inventory/movements/excel', authenticateToken, [
   if (product_id) {
     sql += ' AND im.product_id = ?';
     params.push(product_id);
+  }
+  if (!product_id && product_search) {
+    sql += ` AND (
+      p.name LIKE ? OR p.barcode LIKE ? OR p.presentation LIKE ?
+      OR p.laboratory LIKE ? OR p.lot_number LIKE ? OR p.sanitary_registration LIKE ?
+      OR c.name LIKE ?
+    )`;
+    const searchTerm = `%${String(product_search).trim()}%`;
+    params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
   }
   if (movement_type) {
     if (movement_type === 'adjustment_negative' || movement_type === 'adjustment') {

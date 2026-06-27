@@ -3,10 +3,8 @@ import { body, validationResult, query } from 'express-validator';
 import { db } from '../database/init';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { logAction } from '../middleware/audit';
-import bcrypt from 'bcryptjs';
 
 const router = express.Router();
-const AUDIT_PASSWORD = process.env.AUDIT_PASSWORD || 'admin123';
 
 function getLocalDateTime(): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -42,6 +40,21 @@ function getOpenCashRegister(userId: number): Promise<{ id: number } | null> {
       }
     );
   });
+}
+
+function getPurchaseCancelPassword(): Promise<string> {
+  return new Promise((resolve) => {
+    db.get('SELECT purchase_cancel_password FROM company_settings WHERE id = 1', [], (err, row: any) => {
+      if (err || !row?.purchase_cancel_password) resolve('admin123');
+      else resolve(String(row.purchase_cancel_password));
+    });
+  });
+}
+
+function canModifyPurchase(purchase: any, openCashRegisterId: number | null) {
+  if (purchase.status === 'cancelled') return false;
+  if (!purchase.cash_register_id) return false;
+  return !!openCashRegisterId && Number(purchase.cash_register_id) === Number(openCashRegisterId);
 }
 
 function validateCashPaymentMethod(paymentMethod: string): Promise<{ value: string; name: string } | null> {
@@ -105,8 +118,7 @@ router.get('/', authenticateToken, [
     }
 
     purchases.forEach((p) => {
-      const cashRegId = p.cash_register_id;
-      const canModify = !cashRegId || (openCajaId && openCajaId === cashRegId);
+      const canModify = canModifyPurchase(p, openCajaId);
       p.can_edit = !!canModify;
       p.can_delete = !!canModify;
     });
@@ -168,8 +180,7 @@ router.get('/:id', authenticateToken, async (req: AuthRequest, res) => {
       }
 
       const openCaja = await getOpenCashRegister(req.user!.id);
-      const cashRegId = purchase.cash_register_id;
-      const canModify = !cashRegId || (openCaja && openCaja.id === cashRegId);
+      const canModify = canModifyPurchase(purchase, openCaja?.id ?? null);
       purchase.can_edit = !!canModify;
       purchase.can_delete = !!canModify;
 
@@ -214,15 +225,14 @@ router.post('/', authenticateToken, [
     cash_payment_method,
   } = req.body;
 
-  let cashRegisterId: number | null = null;
+  const openCaja = await getOpenCashRegister(req.user!.id);
+  if (!openCaja) {
+    return res.status(400).json({ error: 'Debes tener una caja abierta para registrar compras.' });
+  }
+
+  let cashRegisterId: number | null = openCaja.id;
   let resolvedCashPaymentMethod: string | null = null;
   if (afecta_caja) {
-    const openCaja = await getOpenCashRegister(req.user!.id);
-    if (!openCaja) {
-      return res.status(400).json({ error: 'Debes tener una caja abierta para registrar compras que afectan a caja.' });
-    }
-    cashRegisterId = openCaja.id;
-
     if (!cash_payment_method) {
       return res.status(400).json({ error: 'Debes seleccionar el método con el que la compra afecta a caja.' });
     }
@@ -414,7 +424,7 @@ router.put('/:id', authenticateToken, [
 
     const openCaja = await getOpenCashRegister(req.user!.id);
     const cashRegId = purchase.cash_register_id;
-    const canEdit = !cashRegId || (openCaja && openCaja.id === cashRegId);
+    const canEdit = canModifyPurchase(purchase, openCaja?.id ?? null);
     if (!canEdit) {
       return res.status(403).json({ error: 'Solo puedes editar compras cuando la caja con la que compraste está abierta.' });
     }
@@ -535,39 +545,31 @@ router.put('/:id', authenticateToken, [
   });
 });
 
-// Delete purchase (only if purchase's cash register is open + password required)
+// Cancel purchase (keeps purchase data and creates a cancellation voucher)
 router.delete('/:id', authenticateToken, [
   body('password').notEmpty().withMessage('Contraseña requerida para eliminar'),
 ], async (req: AuthRequest, res) => {
   const { id } = req.params;
   const purchaseId = Number(id);
-  const { password } = req.body;
+  const { password, reason } = req.body;
 
-  const verifyPassword = (): Promise<boolean> => {
-    return new Promise((resolve) => {
-      if (password === AUDIT_PASSWORD) return resolve(true);
-      if (req.user?.role === 'admin') {
-        db.get('SELECT password FROM users WHERE id = ?', [req.user.id], async (err, user: any) => {
-          if (err || !user) return resolve(false);
-          const ok = await bcrypt.compare(password, user.password).catch(() => false);
-          resolve(ok);
-        });
-      } else {
-        resolve(false);
-      }
-    });
+  const verifyPassword = async (): Promise<boolean> => {
+    const configuredPassword = await getPurchaseCancelPassword();
+    return String(password) === configuredPassword;
   };
 
   db.get('SELECT * FROM purchases WHERE id = ?', [purchaseId], async (err, purchase: any) => {
     if (err || !purchase) {
       return res.status(404).json({ error: 'Compra no encontrada' });
     }
+    if (purchase.status === 'cancelled') {
+      return res.status(400).json({ error: 'Esta compra ya fue anulada.' });
+    }
 
     const openCaja = await getOpenCashRegister(req.user!.id);
-    const cashRegId = purchase.cash_register_id;
-    const canDelete = !cashRegId || (openCaja && openCaja.id === cashRegId);
-    if (!canDelete) {
-      return res.status(403).json({ error: 'Solo puedes eliminar compras cuando la caja con la que compraste está abierta.' });
+    const canCancel = canModifyPurchase(purchase, openCaja?.id ?? null);
+    if (!canCancel) {
+      return res.status(403).json({ error: 'Solo puedes anular compras cuando la caja con la que compraste está abierta.' });
     }
 
     const valid = await verifyPassword();
@@ -578,6 +580,8 @@ router.delete('/:id', authenticateToken, [
     db.all('SELECT * FROM purchase_items WHERE purchase_id = ?', [purchaseId], (itemsErr, items: any[]) => {
       if (itemsErr) return res.status(500).json({ error: 'Database error' });
 
+      const cancelledAt = getLocalDateTime();
+      const cancellationNumber = `ANU-${Date.now()}-${Math.random().toString(36).substr(2, 7).toUpperCase()}`;
       const oldItems = items || [];
       const byProduct: Record<number, number> = {};
       oldItems.forEach((oi: any) => {
@@ -585,33 +589,145 @@ router.delete('/:id', authenticateToken, [
       });
       const productIds = Object.keys(byProduct).map(Number);
       let done = 0;
-      const finish = () => {
-        db.run("DELETE FROM inventory_movements WHERE reference_number = ? AND notes = 'Compra a proveedor'", [purchase.purchase_number], () => {
-        if (purchase.cash_register_id) {
-          db.run('DELETE FROM cash_movements WHERE reference_type = ? AND reference_id = ?', ['purchase', purchaseId], () => {});
-        }
-          db.run('DELETE FROM purchase_items WHERE purchase_id = ?', [purchaseId], () => {
-            db.run('DELETE FROM purchases WHERE id = ?', [purchaseId], function(delErr) {
-              if (delErr) return res.status(500).json({ error: 'Database error' });
-              if (this.changes === 0) return res.status(404).json({ error: 'Compra no encontrada' });
-              logAction(req.user!.id, 'DELETE', 'purchase', purchaseId, null, { purchase_number: purchase.purchase_number }, req);
-              res.json({ message: 'Compra eliminada correctamente' });
+      const validateAvailableStock = (callback: () => void) => {
+        if (productIds.length === 0) return callback();
+
+        const placeholders = productIds.map(() => '?').join(',');
+        db.all(
+          `SELECT p.id, p.name, COALESCE(i.quantity, 0) as current_stock
+           FROM products p
+           LEFT JOIN inventory i ON i.product_id = p.id
+           WHERE p.id IN (${placeholders})`,
+          productIds,
+          (stockErr, stockRows: any[]) => {
+            if (stockErr) return res.status(500).json({ error: 'Database error' });
+
+            const stockByProduct = new Map<number, { name: string; current_stock: number }>();
+            (stockRows || []).forEach((row) => {
+              stockByProduct.set(Number(row.id), {
+                name: row.name,
+                current_stock: Number(row.current_stock || 0),
+              });
             });
-          });
-        });
+
+            const insufficient = productIds
+              .map((pid) => {
+                const stockInfo = stockByProduct.get(pid);
+                const required = Number(byProduct[pid] || 0);
+                const available = Number(stockInfo?.current_stock || 0);
+                return {
+                  product_id: pid,
+                  product_name: stockInfo?.name || `Producto ${pid}`,
+                  required,
+                  available,
+                };
+              })
+              .filter((item) => item.available < item.required);
+
+            if (insufficient.length > 0) {
+              const detail = insufficient
+                .map((item) => `${item.product_name}: disponible ${item.available}, requiere ${item.required}`)
+                .join('; ');
+              return res.status(400).json({
+                error: `No se puede anular la compra porque no hay stock suficiente para revertirla. ${detail}`,
+                insufficient_stock: insufficient,
+              });
+            }
+
+            callback();
+          }
+        );
+      };
+      const finish = () => {
+        db.run(
+          `INSERT INTO purchase_cancellations (
+            cancellation_number, purchase_id, purchase_number, cash_register_id, user_id, reason, total_amount, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            cancellationNumber,
+            purchaseId,
+            purchase.purchase_number,
+            purchase.cash_register_id,
+            req.user!.id,
+            reason || null,
+            purchase.final_amount,
+            cancelledAt,
+          ],
+          (cancelErr) => {
+            if (cancelErr) return res.status(500).json({ error: 'No se pudo registrar el comprobante de anulación.' });
+
+            const updatePurchase = () => {
+              db.run(
+                `UPDATE purchases
+                 SET status = 'cancelled',
+                     cancelled_at = ?,
+                     cancelled_by_user_id = ?,
+                     cancellation_number = ?,
+                     cancellation_reason = ?
+                 WHERE id = ?`,
+                [cancelledAt, req.user!.id, cancellationNumber, reason || null, purchaseId],
+                function(updateErr) {
+                  if (updateErr) return res.status(500).json({ error: 'Database error' });
+                  if (this.changes === 0) return res.status(404).json({ error: 'Compra no encontrada' });
+                  logAction(req.user!.id, 'CANCEL', 'purchase', purchaseId, null, {
+                    purchase_number: purchase.purchase_number,
+                    cancellation_number: cancellationNumber,
+                  }, req);
+                  res.json({
+                    message: 'Compra anulada correctamente',
+                    cancellation_number: cancellationNumber,
+                  });
+                }
+              );
+            };
+
+            if (purchase.afecta_caja && purchase.cash_register_id) {
+              db.run(
+                `INSERT INTO cash_movements (
+                  cash_register_id, movement_type, amount, payment_method,
+                  reference_type, reference_id, description, user_id, created_at
+                ) VALUES (?, 'purchase_cancellation', ?, ?, 'purchase_cancellation', ?, ?, ?, ?)`,
+                [
+                  purchase.cash_register_id,
+                  Math.abs(Number(purchase.final_amount) || 0),
+                  purchase.cash_payment_method || null,
+                  purchaseId,
+                  `Anulación ${cancellationNumber} de compra ${purchase.purchase_number}`,
+                  req.user!.id,
+                  cancelledAt,
+                ],
+                (cashErr) => {
+                  if (cashErr) return res.status(500).json({ error: 'No se pudo registrar el movimiento de caja de anulación.' });
+                  updatePurchase();
+                }
+              );
+              return;
+            }
+
+            updatePurchase();
+          }
+        );
       };
 
       if (productIds.length === 0) return finish();
-      const deletedAt = getLocalDateTime();
+      validateAvailableStock(() => {
       productIds.forEach((pid) => {
         const qty = byProduct[pid];
-        db.run('UPDATE inventory SET quantity = quantity - ?, last_updated = ? WHERE product_id = ?', [qty, deletedAt, pid], () => {
-          done++;
-          if (done === productIds.length) finish();
+        db.run('UPDATE inventory SET quantity = quantity - ?, last_updated = ? WHERE product_id = ?', [qty, cancelledAt, pid], () => {
+          db.run(
+            `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, notes, created_at)
+             VALUES (?, 'adjustment_negative', ?, ?, ?, ?, ?)`,
+            [pid, qty, cancellationNumber, req.user!.id, `Anulación de compra ${purchase.purchase_number}`, cancelledAt],
+            () => {
+              done++;
+              if (done === productIds.length) finish();
+            }
+          );
         });
       });
     });
   });
+});
 });
 
 export default router;

@@ -21,6 +21,7 @@ type FormData = {
   non_admin_history_days: number;
   cash_reopen_password: string;
   return_password: string;
+  purchase_cancel_password: string;
 };
 
 const emptyForm: FormData = {
@@ -40,6 +41,7 @@ const emptyForm: FormData = {
   non_admin_history_days: 5,
   cash_reopen_password: '',
   return_password: '',
+  purchase_cancel_password: '',
 };
 
 export default function CompanySettingsPage() {
@@ -66,6 +68,7 @@ export default function CompanySettingsPage() {
       non_admin_history_days: settings.non_admin_history_days || 5,
       cash_reopen_password: '',
       return_password: '',
+      purchase_cancel_password: '',
     });
   }, [settings]);
 
@@ -96,6 +99,7 @@ export default function CompanySettingsPage() {
     };
     if (!formData.cash_reopen_password.trim()) delete payload.cash_reopen_password;
     if (!formData.return_password.trim()) delete payload.return_password;
+    if (!formData.purchase_cancel_password.trim()) delete payload.purchase_cancel_password;
 
     updateMutation.mutate(payload);
   };
@@ -273,6 +277,16 @@ export default function CompanySettingsPage() {
               value={formData.return_password}
               onChange={(e) => setFormData({ ...formData, return_password: e.target.value })}
               placeholder={settings?.has_return_password ? 'Dejar en blanco para mantener la actual' : 'Nueva contraseña'}
+              minLength={4}
+            />
+          </div>
+          <div className="form-group">
+            <label>Contraseña para anular compras</label>
+            <input
+              type="password"
+              value={formData.purchase_cancel_password}
+              onChange={(e) => setFormData({ ...formData, purchase_cancel_password: e.target.value })}
+              placeholder={settings?.has_purchase_cancel_password ? 'Dejar en blanco para mantener la actual' : 'Nueva contraseña'}
               minLength={4}
             />
           </div>

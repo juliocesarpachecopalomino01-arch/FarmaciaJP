@@ -110,6 +110,9 @@ router.get('/', authenticateToken, [
       COALESCE(agg.total_sales, 0) as total_sales,
       COALESCE(agg.total_amount, 0) as total_amount,
       COALESCE(agg.cash_amount, 0) as cash_amount,
+      COALESCE(agg.yape_amount, 0) as yape_amount,
+      COALESCE(agg.visa_amount, 0) as visa_amount,
+      COALESCE(agg.digital_amount, 0) as digital_amount,
       COALESCE(cmagg.cash_movements_amount, 0) as cash_movements_amount,
       (COALESCE(agg.cash_amount, 0) + COALESCE(cmagg.cash_movements_amount, 0)) as expected_cash_amount
     FROM cash_registers cr
@@ -119,7 +122,10 @@ router.get('/', authenticateToken, [
         cash_register_id,
         COUNT(*) as total_sales,
         COALESCE(SUM(s.final_amount), 0) as total_amount,
-        COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN s.payment_method = 'cash' THEN 1 ELSE 0 END) = 1 THEN s.final_amount ELSE 0 END), 0) as cash_amount
+        COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN s.payment_method = 'cash' THEN 1 ELSE 0 END) = 1 THEN s.final_amount ELSE 0 END), 0) as cash_amount,
+        COALESCE(SUM(CASE WHEN LOWER(COALESCE(pm.value, s.payment_method, '')) LIKE '%yape%' OR LOWER(COALESCE(pm.name, '')) LIKE '%yape%' THEN s.final_amount ELSE 0 END), 0) as yape_amount,
+        COALESCE(SUM(CASE WHEN LOWER(COALESCE(pm.value, s.payment_method, '')) LIKE '%visa%' OR LOWER(COALESCE(pm.name, '')) LIKE '%visa%' OR LOWER(COALESCE(pm.value, s.payment_method, '')) = 'card' OR LOWER(COALESCE(pm.name, '')) LIKE '%tarjeta%' THEN s.final_amount ELSE 0 END), 0) as visa_amount,
+        COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN s.payment_method = 'cash' THEN 1 ELSE 0 END) = 0 THEN s.final_amount ELSE 0 END), 0) as digital_amount
       FROM sales s
       LEFT JOIN payment_methods pm ON pm.value = s.payment_method
       WHERE (s.status != 'cancelled' OR s.status IS NULL)

@@ -90,7 +90,8 @@ async function runCriticalMigrations(): Promise<void> {
     ['show_qr', 'INTEGER DEFAULT 1'],
     ['non_admin_history_days', 'INTEGER DEFAULT 5'],
     ['cash_reopen_password', "TEXT DEFAULT 'admin123'"],
-    ['return_password', "TEXT DEFAULT 'd3v0luc10n$2026$*'"]
+    ['return_password', "TEXT DEFAULT 'd3v0luc10n$2026$*'"],
+    ['purchase_cancel_password', "TEXT DEFAULT 'admin123'"]
   ]);
 
   await ensureColumns('products', [
@@ -332,8 +333,30 @@ async function runCriticalMigrations(): Promise<void> {
   await ensureColumns('purchases', [
     ['cash_register_id', 'INTEGER'],
     ['afecta_caja', 'INTEGER DEFAULT 0'],
-    ['cash_payment_method', 'TEXT']
+    ['cash_payment_method', 'TEXT'],
+    ['status', "TEXT DEFAULT 'completed'"],
+    ['cancelled_at', 'DATETIME'],
+    ['cancelled_by_user_id', 'INTEGER'],
+    ['cancellation_number', 'TEXT'],
+    ['cancellation_reason', 'TEXT']
   ]);
+
+  await runDb(`
+    CREATE TABLE IF NOT EXISTS purchase_cancellations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      cancellation_number TEXT UNIQUE NOT NULL,
+      purchase_id INTEGER NOT NULL,
+      purchase_number TEXT NOT NULL,
+      cash_register_id INTEGER,
+      user_id INTEGER NOT NULL,
+      reason TEXT,
+      total_amount REAL NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (purchase_id) REFERENCES purchases(id),
+      FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id),
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
 }
 
 export function initializeDatabase(): Promise<void> {
@@ -458,6 +481,7 @@ export function initializeDatabase(): Promise<void> {
           non_admin_history_days INTEGER DEFAULT 5,
           cash_reopen_password TEXT DEFAULT 'admin123',
           return_password TEXT DEFAULT 'd3v0luc10n$2026$*',
+          purchase_cancel_password TEXT DEFAULT 'admin123',
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
       `);
@@ -938,6 +962,7 @@ export function initializeDatabase(): Promise<void> {
         addColumn('non_admin_history_days', 'INTEGER DEFAULT 5');
         addColumn('cash_reopen_password', "TEXT DEFAULT 'admin123'");
         addColumn('return_password', "TEXT DEFAULT 'd3v0luc10n$2026$*'");
+        addColumn('purchase_cancel_password', "TEXT DEFAULT 'admin123'");
       });
 
       // Ensure product bonus/expiration columns exist in products table for existing databases

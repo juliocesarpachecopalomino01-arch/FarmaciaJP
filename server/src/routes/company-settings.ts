@@ -23,15 +23,17 @@ const defaultSettings = {
   non_admin_history_days: 5,
   has_cash_reopen_password: true,
   has_return_password: true,
+  has_purchase_cancel_password: true,
 };
 
 function sanitizeSettings(row: any) {
   if (!row) return defaultSettings;
-  const { cash_reopen_password, return_password, ...safe } = row;
+  const { cash_reopen_password, return_password, purchase_cancel_password, ...safe } = row;
   return {
     ...safe,
     has_cash_reopen_password: !!cash_reopen_password,
     has_return_password: !!return_password,
+    has_purchase_cancel_password: !!purchase_cancel_password,
   };
 }
 
@@ -75,6 +77,7 @@ router.put('/', authenticateToken, requireRole('admin'), [
   body('non_admin_history_days').optional().isInt({ min: 1, max: 365 }),
   body('cash_reopen_password').optional({ nullable: true }).isString().isLength({ min: 4, max: 80 }),
   body('return_password').optional({ nullable: true }).isString().isLength({ min: 4, max: 80 }),
+  body('purchase_cancel_password').optional({ nullable: true }).isString().isLength({ min: 4, max: 80 }),
 ], (req: AuthRequest, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -98,6 +101,7 @@ router.put('/', authenticateToken, requireRole('admin'), [
     'non_admin_history_days',
     'cash_reopen_password',
     'return_password',
+    'purchase_cancel_password',
   ];
 
   const updates: string[] = [];
@@ -105,13 +109,13 @@ router.put('/', authenticateToken, requireRole('admin'), [
 
   fields.forEach((field) => {
     if (req.body[field] === undefined) return;
-    if ((field === 'cash_reopen_password' || field === 'return_password') && !String(req.body[field] || '').trim()) return;
+    if ((field === 'cash_reopen_password' || field === 'return_password' || field === 'purchase_cancel_password') && !String(req.body[field] || '').trim()) return;
     updates.push(`${field} = ?`);
     if (field === 'show_logo' || field === 'show_qr') {
       params.push(req.body[field] ? 1 : 0);
     } else if (field === 'non_admin_history_days') {
       params.push(Math.min(365, Math.max(1, Math.floor(Number(req.body[field]) || 5))));
-    } else if (field === 'cash_reopen_password' || field === 'return_password') {
+    } else if (field === 'cash_reopen_password' || field === 'return_password' || field === 'purchase_cancel_password') {
       params.push(String(req.body[field]).trim());
     } else {
       params.push(req.body[field] || null);

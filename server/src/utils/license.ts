@@ -15,14 +15,8 @@ export type LicenseStatus =
   | { valid: true; payload: LicensePayload; daysRemaining: number }
   | { valid: false; reason: string; payload?: LicensePayload };
 
-const LICENSE_SECRET = process.env.LICENSE_SECRET || 'farmacia-local-license-secret-change-me';
-
-function base64UrlEncode(value: string) {
-  return Buffer.from(value, 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
+function getLicensePublicKey() {
+  return String(process.env.LICENSE_PUBLIC_KEY || '').replace(/\\n/g, '\n').trim();
 }
 
 function base64UrlDecode(value: string) {
@@ -30,21 +24,9 @@ function base64UrlDecode(value: string) {
   return Buffer.from(normalized, 'base64').toString('utf8');
 }
 
-function signPayload(encodedPayload: string) {
-  return crypto
-    .createHmac('sha256', LICENSE_SECRET)
-    .update(encodedPayload)
-    .digest('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-}
-
-function timingSafeEqual(a: string, b: string) {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  if (left.length !== right.length) return false;
-  return crypto.timingSafeEqual(left, right);
+function base64UrlToBuffer(value: string) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  return Buffer.from(normalized, 'base64');
 }
 
 export function getMachineId() {
@@ -57,20 +39,12 @@ export function getMachineId() {
   return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 24).toUpperCase();
 }
 
-export function createLicenseKey(payload: LicensePayload) {
-  const cleanPayload: LicensePayload = {
-    customer: payload.customer.trim(),
-    expiresAt: payload.expiresAt,
-    issuedAt: payload.issuedAt || new Date().toISOString(),
-    machineId: payload.machineId?.trim() || undefined,
-    maxUsers: payload.maxUsers,
-    features: payload.features,
-  };
-  const encodedPayload = base64UrlEncode(JSON.stringify(cleanPayload));
-  return `FARM-${encodedPayload}.${signPayload(encodedPayload)}`;
-}
-
 export function validateLicenseKey(licenseKey: string): LicenseStatus {
+  const publicKey = getLicensePublicKey();
+  if (!publicKey) {
+    return { valid: false, reason: 'Servidor sin clave publica de licencias' };
+  }
+
   const key = String(licenseKey || '').trim();
   if (!key.startsWith('FARM-') || !key.includes('.')) {
     return { valid: false, reason: 'Formato de licencia invalido' };
@@ -81,8 +55,18 @@ export function validateLicenseKey(licenseKey: string): LicenseStatus {
     return { valid: false, reason: 'Formato de licencia incompleto' };
   }
 
-  const expectedSignature = signPayload(encodedPayload);
-  if (!timingSafeEqual(signature, expectedSignature)) {
+  const verifier = crypto.createVerify('RSA-SHA256');
+  verifier.update(encodedPayload);
+  verifier.end();
+
+  let signatureValid = false;
+  try {
+    signatureValid = verifier.verify(publicKey, base64UrlToBuffer(signature));
+  } catch {
+    signatureValid = false;
+  }
+
+  if (!signatureValid) {
     return { valid: false, reason: 'Firma de licencia invalida' };
   }
 

@@ -46,6 +46,7 @@ type ProductSearchFilterProps = {
   products: Product[];
   value: string;
   search: string;
+  loading?: boolean;
   allowAll?: boolean;
   placeholder?: string;
   onSearchChange: (value: string) => void;
@@ -56,6 +57,7 @@ function ProductSearchFilter({
   products,
   value,
   search,
+  loading = false,
   allowAll = false,
   placeholder = 'Buscar producto...',
   onSearchChange,
@@ -109,6 +111,9 @@ function ProductSearchFilter({
               <span>Mostrar todos los productos</span>
             </button>
           )}
+          {loading && (
+            <div className="product-search-filter-empty">Buscando productos...</div>
+          )}
           {filteredProducts.map((product) => (
             <button
               type="button"
@@ -121,7 +126,7 @@ function ProductSearchFilter({
               <span>{product.barcode || product.category_name || '-'}</span>
             </button>
           ))}
-          {filteredProducts.length === 0 && (
+          {!loading && filteredProducts.length === 0 && (
             <div className="product-search-filter-empty">No se encontraron productos</div>
           )}
         </div>
@@ -181,6 +186,7 @@ function downloadExcel(path: string, filename: string) {
 export default function ProductMovementsReport() {
   const [activeTab, setActiveTab] = useState<TabKey>('movements');
   const [products, setProducts] = useState<Product[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState(false);
   const [movements, setMovements] = useState<InventoryMovement[]>([]);
   const [kardex, setKardex] = useState<KardexResponse | null>(null);
   const [loadingMovements, setLoadingMovements] = useState(false);
@@ -199,24 +205,57 @@ export default function ProductMovementsReport() {
   });
   const [kardexProductSearch, setKardexProductSearch] = useState('');
 
-  useEffect(() => {
-    productsApi.getAll({ is_active: 1, limit: 1000 }).then((response) => {
+  const searchProducts = async (search = '') => {
+    setLoadingProducts(true);
+    try {
+      const response = await productsApi.getAll({
+        search: search.trim() || undefined,
+        is_active: 1,
+        limit: 100,
+      });
       setProducts(response.products);
-      if (response.products.length > 0) {
+      return response.products;
+    } finally {
+      setLoadingProducts(false);
+    }
+  };
+
+  useEffect(() => {
+    searchProducts().then((items) => {
+      if (items.length > 0) {
         setKardexFilters((current) => current.product_id ? current : {
           ...current,
-          product_id: String(response.products[0].id),
+          product_id: String(items[0].id),
         });
-        setKardexProductSearch((current) => current || getProductLabel(response.products[0]));
+        setKardexProductSearch((current) => current || getProductLabel(items[0]));
       }
     });
   }, []);
+
+  useEffect(() => {
+    const search = movementProductSearch.trim();
+    if (!search || movementFilters.product_id) return;
+    const timeout = window.setTimeout(() => {
+      searchProducts(search);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [movementProductSearch, movementFilters.product_id]);
+
+  useEffect(() => {
+    const search = kardexProductSearch.trim();
+    if (!search || kardexFilters.product_id) return;
+    const timeout = window.setTimeout(() => {
+      searchProducts(search);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [kardexProductSearch, kardexFilters.product_id]);
 
   const loadMovements = async () => {
     setLoadingMovements(true);
     try {
       const data = await inventoryApi.getMovements({
         product_id: movementFilters.product_id ? Number(movementFilters.product_id) : undefined,
+        product_search: !movementFilters.product_id && movementProductSearch.trim() ? movementProductSearch.trim() : undefined,
         movement_type: movementFilters.movement_type || undefined,
         start_date: movementFilters.start_date || undefined,
         end_date: movementFilters.end_date || undefined,
@@ -271,6 +310,7 @@ export default function ProductMovementsReport() {
 
   const movementExportParams = new URLSearchParams();
   if (movementFilters.product_id) movementExportParams.set('product_id', movementFilters.product_id);
+  if (!movementFilters.product_id && movementProductSearch.trim()) movementExportParams.set('product_search', movementProductSearch.trim());
   if (movementFilters.movement_type) movementExportParams.set('movement_type', movementFilters.movement_type);
   if (movementFilters.start_date) movementExportParams.set('start_date', movementFilters.start_date);
   if (movementFilters.end_date) movementExportParams.set('end_date', movementFilters.end_date);
@@ -309,6 +349,7 @@ export default function ProductMovementsReport() {
                   products={products}
                   value={movementFilters.product_id}
                   search={movementProductSearch}
+                  loading={loadingProducts}
                   allowAll
                   placeholder="Todos"
                   onSearchChange={setMovementProductSearch}
@@ -429,6 +470,7 @@ export default function ProductMovementsReport() {
                   products={products}
                   value={kardexFilters.product_id}
                   search={kardexProductSearch}
+                  loading={loadingProducts}
                   placeholder="Escribe para buscar producto..."
                   onSearchChange={setKardexProductSearch}
                   onChange={(productId) => setKardexFilters({ ...kardexFilters, product_id: productId })}

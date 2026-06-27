@@ -178,6 +178,8 @@ export default function CashMovements() {
     switch (type) {
       case 'purchase':
         return 'Compra';
+      case 'purchase_cancellation':
+        return 'Anulación de compra';
       case 'return':
         return 'Devolución';
       case 'sale':

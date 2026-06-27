@@ -1,7 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from 'react-query';
 import { inventoryApi, InventoryItem, InventoryMovementRequest, InventoryQuickFilter } from '../api/inventory';
-import { productsApi } from '../api/products';
+import { Product, productsApi } from '../api/products';
 import { categoriesApi, Category } from '../api/categories';
 import { buildApiUrl } from '../api/client';
 import { printInventoryAdjustmentReceipt, printInventoryInitialLoadReceipt } from '../utils/printReceipt';
@@ -73,6 +73,80 @@ function CategorySearch({ categories, value, onChange }: CategorySearchProps) {
   );
 }
 
+type ProductSearchProps = {
+  value: string;
+  search: string;
+  products: Product[];
+  loading: boolean;
+  onSearchChange: (value: string) => void;
+  onChange: (productId: string) => void;
+};
+
+function getProductSearchLabel(product: Product) {
+  return `${product.name}${product.barcode ? ` (${product.barcode})` : ''}`;
+}
+
+function ProductSearch({ value, search, products, loading, onSearchChange, onChange }: ProductSearchProps) {
+  const [open, setOpen] = useState(false);
+
+  const handleTextChange = (text: string) => {
+    onSearchChange(text);
+    onChange('');
+    setOpen(true);
+  };
+
+  const handleSelect = (product: Product) => {
+    onSearchChange(getProductSearchLabel(product));
+    onChange(String(product.id));
+    setOpen(false);
+  };
+
+  return (
+    <div className="inventory-product-search">
+      <input
+        type="text"
+        value={search}
+        placeholder="Escribe nombre, codigo, laboratorio o categoria"
+        onChange={(event) => handleTextChange(event.target.value)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 140)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && open && products.length === 1) {
+            event.preventDefault();
+            handleSelect(products[0]);
+          }
+        }}
+        autoComplete="off"
+        required
+      />
+      {open && (
+        <div className="inventory-product-search-menu">
+          {loading && (
+            <div className="inventory-product-search-empty">Buscando productos...</div>
+          )}
+          {!loading && products.map((product) => (
+            <button
+              type="button"
+              key={product.id}
+              className={String(product.id) === value ? 'active' : ''}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => handleSelect(product)}
+            >
+              <strong>{product.name}</strong>
+              <span>
+                {[product.barcode, product.laboratory, product.category_name].filter(Boolean).join(' - ') || '-'}
+              </span>
+            </button>
+          ))}
+          {!loading && products.length === 0 && (
+            <div className="inventory-product-search-empty">No se encontraron productos</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function exportInventoryExcel(filters: { search: string; category: string; status: string }) {
   const token = localStorage.getItem('token');
   const params = new URLSearchParams();
@@ -122,6 +196,9 @@ export default function Inventory() {
     reference_number: '',
     notes: '',
   });
+  const [movementProductSearch, setMovementProductSearch] = useState('');
+  const [movementProductOptions, setMovementProductOptions] = useState<Product[]>([]);
+  const [loadingMovementProducts, setLoadingMovementProducts] = useState(false);
   const [stockForm, setStockForm] = useState({
     min_stock: '',
     max_stock: '',
@@ -141,12 +218,41 @@ export default function Inventory() {
     })
     , { keepPreviousData: true }
   );
-  const { data: productsData } = useQuery('products', () => productsApi.getAll({ limit: 1000 }));
   const { data: categories } = useQuery('categories', () => categoriesApi.getAll());
 
   useEffect(() => {
     setCurrentPage(1);
   }, [filters.search, filters.category, filters.status, quickFilter]);
+
+  const searchMovementProducts = async (search = '') => {
+    setLoadingMovementProducts(true);
+    try {
+      const response = await productsApi.getAll({
+        search: search.trim() || undefined,
+        is_active: 1,
+        limit: 100,
+      });
+      setMovementProductOptions(response.products);
+    } catch (error) {
+      console.error('Error al buscar productos para ajuste:', error);
+      setMovementProductOptions([]);
+    } finally {
+      setLoadingMovementProducts(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!showMovementModal) return;
+    searchMovementProducts(movementProductSearch);
+  }, [showMovementModal]);
+
+  useEffect(() => {
+    if (!showMovementModal || movementForm.product_id) return;
+    const timeout = window.setTimeout(() => {
+      searchMovementProducts(movementProductSearch);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [showMovementModal, movementProductSearch, movementForm.product_id]);
 
   const movementMutation = useMutation(inventoryApi.addMovement, {
     onSuccess: async (data) => {
@@ -207,6 +313,8 @@ export default function Inventory() {
       reference_number: '',
       notes: '',
     });
+    setMovementProductSearch('');
+    setMovementProductOptions([]);
   };
 
   const handleStockEdit = (item: InventoryItem) => {
@@ -221,6 +329,10 @@ export default function Inventory() {
 
   const handleMovementSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!movementForm.product_id) {
+      alert('Selecciona un producto de la lista de resultados.');
+      return;
+    }
     movementMutation.mutate({
       product_id: Number(movementForm.product_id),
       movement_type: movementForm.movement_type,
@@ -463,18 +575,14 @@ export default function Inventory() {
             <form onSubmit={handleMovementSubmit}>
               <div className="form-group">
                 <label>Producto *</label>
-                <select
+                <ProductSearch
                   value={movementForm.product_id}
-                  onChange={(e) => setMovementForm({ ...movementForm, product_id: e.target.value })}
-                  required
-                >
-                  <option value="">Seleccionar producto</option>
-                  {productsData?.products.map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {product.name} {product.barcode && `(${product.barcode})`}
-                    </option>
-                  ))}
-                </select>
+                  search={movementProductSearch}
+                  products={movementProductOptions}
+                  loading={loadingMovementProducts}
+                  onSearchChange={setMovementProductSearch}
+                  onChange={(productId) => setMovementForm({ ...movementForm, product_id: productId })}
+                />
               </div>
               <div className="form-group">
                 <label>Tipo de ajuste *</label>

@@ -126,6 +126,7 @@ export const inventoryApi = {
 
   getMovements: async (filters?: {
     product_id?: number;
+    product_search?: string;
     movement_type?: string;
     start_date?: string;
     end_date?: string;

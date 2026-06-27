@@ -25,6 +25,7 @@ export default function Purchases() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
   const [deletePassword, setDeletePassword] = useState('');
+  const [deleteReason, setDeleteReason] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editCart, setEditCart] = useState<CartItem[]>([]);
   const [productSearch, setProductSearch] = useState('');
@@ -116,9 +117,9 @@ export default function Purchases() {
   );
 
   const deletePurchaseMutation = useMutation(
-    ({ id, password }: { id: number; password: string }) => purchasesApi.delete(id, password),
+    ({ id, password, reason }: { id: number; password: string; reason?: string }) => purchasesApi.delete(id, password, reason),
     {
-      onSuccess: () => {
+      onSuccess: (data) => {
         queryClient.invalidateQueries('purchases');
         queryClient.invalidateQueries('inventory');
         queryClient.invalidateQueries('products');
@@ -129,6 +130,10 @@ export default function Purchases() {
         setShowDeleteModal(false);
         setEditingPurchase(null);
         setDeletePassword('');
+        setDeleteReason('');
+        if (data.cancellation_number) {
+          alert(`Compra anulada correctamente. Comprobante: ${data.cancellation_number}`);
+        }
       },
       onError: (err: any) => {
         alert(err?.response?.data?.error || 'Error al eliminar');
@@ -173,11 +178,12 @@ export default function Purchases() {
 
   const openDeleteModal = (purchase: Purchase) => {
     if (!purchase.can_delete) {
-      alert('Solo puedes eliminar cuando la caja con la que compraste está abierta.');
+      alert('Solo puedes anular cuando la caja con la que compraste está abierta.');
       return;
     }
     setEditingPurchase(purchase);
     setDeletePassword('');
+    setDeleteReason('');
     setShowDeleteModal(true);
   };
 
@@ -331,8 +337,8 @@ export default function Purchases() {
       return;
     }
 
-    if (purchaseForm.afecta_caja && !currentCaja) {
-      alert('Debes tener una caja abierta para registrar compras que afectan a caja.');
+    if (!currentCaja) {
+      alert('Debes tener una caja abierta para registrar compras.');
       return;
     }
     if (purchaseForm.afecta_caja && !purchaseForm.cash_payment_method) {
@@ -359,8 +365,9 @@ export default function Purchases() {
   };
 
   const purchases = purchasesData?.purchases || [];
-  const purchasesTotal = purchases.reduce((sum, purchase) => sum + Number(purchase.final_amount || 0), 0);
-  const cashAffectedCount = purchases.filter((purchase) => purchase.afecta_caja).length;
+  const activePurchases = purchases.filter((purchase) => purchase.status !== 'cancelled');
+  const purchasesTotal = activePurchases.reduce((sum, purchase) => sum + Number(purchase.final_amount || 0), 0);
+  const cashAffectedCount = activePurchases.filter((purchase) => purchase.afecta_caja).length;
 
   const handleExportPurchases = async () => {
     try {
@@ -382,7 +389,12 @@ export default function Purchases() {
             <Download size={20} />
             Exportar Excel
           </button>
-          <button className="btn-primary" onClick={() => { setCart([]); resetForm(); setShowModal(true); }}>
+          <button
+            className="btn-primary"
+            onClick={() => { setCart([]); resetForm(); setShowModal(true); }}
+            disabled={!currentCaja}
+            title={currentCaja ? 'Nueva compra' : 'Debes abrir una caja para registrar compras'}
+          >
             <Plus size={20} />
             Nueva Compra
           </button>
@@ -442,6 +454,7 @@ export default function Purchases() {
               <th>Total</th>
               <th>Afecta Caja</th>
               <th>Método Caja</th>
+              <th>Estado</th>
               <th>Fecha</th>
               <th>Acciones</th>
             </tr>
@@ -454,6 +467,13 @@ export default function Purchases() {
                 <td>S/ {purchase.final_amount.toFixed(2)}</td>
                 <td>{purchase.afecta_caja ? 'Sí' : 'No'}</td>
                 <td>{purchase.afecta_caja ? (purchase.cash_payment_method_name || purchase.cash_payment_method || '-') : '-'}</td>
+                <td>
+                  {purchase.status === 'cancelled' ? (
+                    <span className="badge badge-danger" title={purchase.cancellation_number || undefined}>Anulada</span>
+                  ) : (
+                    <span className="badge badge-success">Vigente</span>
+                  )}
+                </td>
                 <td>{format(new Date(purchase.created_at), 'dd/MM/yyyy HH:mm')}</td>
                 <td>
                   <div className="action-buttons">
@@ -471,7 +491,7 @@ export default function Purchases() {
                       className="btn-icon btn-danger"
                       onClick={() => openDeleteModal(purchase)}
                       disabled={!purchase.can_delete}
-                      title={purchase.can_delete ? 'Eliminar' : 'Solo se puede eliminar con la caja abierta'}
+                      title={purchase.can_delete ? 'Anular compra' : 'Solo se puede anular con la misma caja abierta'}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -851,11 +871,23 @@ export default function Purchases() {
       )}
 
       {showDeleteModal && editingPurchase && (
-        <div className="modal-overlay" onClick={() => { setShowDeleteModal(false); setEditingPurchase(null); setDeletePassword(''); }}>
+        <div className="modal-overlay" onClick={() => { setShowDeleteModal(false); setEditingPurchase(null); setDeletePassword(''); setDeleteReason(''); }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h2>Eliminar Compra</h2>
-            <p>¿Está seguro de eliminar la compra <strong>{editingPurchase.purchase_number}</strong>? Se revertirá el inventario y los movimientos de caja.</p>
-            <p style={{ color: 'var(--danger)', fontSize: '0.875rem' }}>Esta acción requiere contraseña.</p>
+            <h2>Anular Compra</h2>
+            <p>
+              Se generará un comprobante de anulación para la compra <strong>{editingPurchase.purchase_number}</strong>.
+              La compra quedará guardada como anulada y se revertirá el stock{editingPurchase.afecta_caja ? ' y la caja' : ''}.
+            </p>
+            <p style={{ color: 'var(--danger)', fontSize: '0.875rem' }}>Esta acción requiere la contraseña configurada en Mi Empresa.</p>
+            <div className="form-group">
+              <label>Motivo de anulación</label>
+              <textarea
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="Ejemplo: compra registrada por error"
+                rows={3}
+              />
+            </div>
             <div className="form-group">
               <label>Contraseña *</label>
               <input
@@ -866,14 +898,14 @@ export default function Purchases() {
               />
             </div>
             <div className="modal-actions">
-              <button type="button" className="btn-secondary" onClick={() => { setShowDeleteModal(false); setEditingPurchase(null); setDeletePassword(''); }}>Cancelar</button>
+              <button type="button" className="btn-secondary" onClick={() => { setShowDeleteModal(false); setEditingPurchase(null); setDeletePassword(''); setDeleteReason(''); }}>Cancelar</button>
               <button
                 type="button"
                 className="btn-danger"
                 disabled={!deletePassword || deletePurchaseMutation.isLoading}
-                onClick={() => deletePurchaseMutation.mutate({ id: editingPurchase.id, password: deletePassword })}
+                onClick={() => deletePurchaseMutation.mutate({ id: editingPurchase.id, password: deletePassword, reason: deleteReason || undefined })}
               >
-                Eliminar
+                Anular Compra
               </button>
             </div>
           </div>

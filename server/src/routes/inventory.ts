@@ -344,11 +344,12 @@ router.post('/movement', authenticateToken, [
 // Get inventory movements
 router.get('/movements', [
   query('product_id').optional().isInt(),
+  query('product_search').optional().isString(),
   query('movement_type').optional().isIn(['entry', 'exit', 'adjustment', 'adjustment_positive', 'adjustment_negative']),
   query('start_date').optional(),
   query('end_date').optional(),
 ], (req, res) => {
-  const { product_id, movement_type, start_date, end_date } = req.query;
+  const { product_id, product_search, movement_type, start_date, end_date } = req.query;
 
   let query = `
     SELECT im.*, p.name as product_name, p.barcode,
@@ -364,6 +365,16 @@ router.get('/movements', [
   if (product_id) {
     query += ' AND im.product_id = ?';
     params.push(product_id);
+  }
+
+  if (!product_id && product_search) {
+    query += ` AND (
+      p.name LIKE ? OR p.barcode LIKE ? OR p.presentation LIKE ?
+      OR p.laboratory LIKE ? OR p.lot_number LIKE ? OR p.sanitary_registration LIKE ?
+      OR c.name LIKE ?
+    )`;
+    const searchTerm = `%${String(product_search).trim()}%`;
+    params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
   }
 
   if (movement_type) {

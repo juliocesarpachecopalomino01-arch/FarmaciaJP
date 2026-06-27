@@ -1,4 +1,41 @@
-import { createLicenseKey, getMachineId } from '../utils/license';
+import crypto from 'crypto';
+import { getMachineId, LicensePayload } from '../utils/license';
+
+function base64UrlEncode(value: string | Buffer) {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value, 'utf8');
+  return buffer
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function getPrivateKey() {
+  return String(process.env.LICENSE_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
+}
+
+function createLicenseKey(payload: LicensePayload) {
+  const privateKey = getPrivateKey();
+  if (!privateKey) {
+    throw new Error('Falta LICENSE_PRIVATE_KEY. Genera tus llaves con: npm run generate-license-keys');
+  }
+
+  const cleanPayload: LicensePayload = {
+    customer: payload.customer.trim(),
+    expiresAt: payload.expiresAt,
+    issuedAt: payload.issuedAt || new Date().toISOString(),
+    machineId: payload.machineId?.trim() || undefined,
+    maxUsers: payload.maxUsers,
+    features: payload.features,
+  };
+
+  const encodedPayload = base64UrlEncode(JSON.stringify(cleanPayload));
+  const signer = crypto.createSign('RSA-SHA256');
+  signer.update(encodedPayload);
+  signer.end();
+  const signature = signer.sign(privateKey);
+  return `FARM-${encodedPayload}.${base64UrlEncode(signature)}`;
+}
 
 function readArg(name: string) {
   const prefix = `--${name}=`;
@@ -18,12 +55,18 @@ if (!customer || !expiresAt) {
   process.exit(1);
 }
 
-const key = createLicenseKey({
-  customer,
-  expiresAt,
-  machineId: machineId || undefined,
-  maxUsers,
-});
+let key: string;
+try {
+  key = createLicenseKey({
+    customer,
+    expiresAt,
+    machineId: machineId || undefined,
+    maxUsers,
+  });
+} catch (error: any) {
+  console.error(error.message || 'No se pudo generar la licencia');
+  process.exit(1);
+}
 
 console.log('\nLICENCIA GENERADA:\n');
 console.log(key);

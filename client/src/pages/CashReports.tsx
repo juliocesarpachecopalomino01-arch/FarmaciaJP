@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useRef, useMemo, useState } from 'react';
 import { useQuery } from 'react-query';
 import { Filter, RotateCcw } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
@@ -70,6 +70,8 @@ function getResult(diff: number | null) {
 }
 
 export default function CashReports() {
+  const topScrollRef = useRef<HTMLDivElement | null>(null);
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const { data: companySettings } = useQuery('company-settings', companySettingsApi.get);
@@ -115,12 +117,15 @@ export default function CashReports() {
           : Number(register.closing_balance);
         const diff = getDifference(register);
         acc.count += 1;
+        acc.totalSold += Number(register.total_amount || 0);
+        acc.yape += Number(register.yape_amount || 0);
+        acc.visa += Number(register.visa_amount || 0);
         acc.expected += expected;
         acc.delivered += delivered;
         acc.difference += diff || 0;
         return acc;
       },
-      { count: 0, expected: 0, delivered: 0, difference: 0 }
+      { count: 0, totalSold: 0, yape: 0, visa: 0, expected: 0, delivered: 0, difference: 0 }
     );
   }, [registers]);
 
@@ -130,6 +135,19 @@ export default function CashReports() {
       end_date: maxVisibleDate,
       user_id: undefined,
     });
+  };
+
+  const syncHorizontalScroll = (source: 'top' | 'table') => {
+    const top = topScrollRef.current;
+    const table = tableScrollRef.current;
+    if (!top || !table) return;
+
+    if (source === 'top' && table.scrollLeft !== top.scrollLeft) {
+      table.scrollLeft = top.scrollLeft;
+    }
+    if (source === 'table' && top.scrollLeft !== table.scrollLeft) {
+      top.scrollLeft = table.scrollLeft;
+    }
   };
 
   return (
@@ -202,14 +220,29 @@ export default function CashReports() {
           <small>segun filtros</small>
         </div>
         <div className="cash-summary-card">
-          <span>Calculado</span>
-          <strong>{formatCurrency(summary.expected)}</strong>
-          <small>saldo esperado</small>
+          <span>Total vendido</span>
+          <strong>{formatCurrency(summary.totalSold)}</strong>
+          <small>ventas registradas</small>
         </div>
         <div className="cash-summary-card">
-          <span>Entregado</span>
+          <span>Yape</span>
+          <strong>{formatCurrency(summary.yape)}</strong>
+          <small>calculado</small>
+        </div>
+        <div className="cash-summary-card">
+          <span>Visa/Tarjeta</span>
+          <strong>{formatCurrency(summary.visa)}</strong>
+          <small>calculado</small>
+        </div>
+        <div className="cash-summary-card">
+          <span>Efectivo calculado</span>
+          <strong>{formatCurrency(summary.expected)}</strong>
+          <small>efectivo esperado</small>
+        </div>
+        <div className="cash-summary-card">
+          <span>Efectivo entregado</span>
           <strong>{formatCurrency(summary.delivered)}</strong>
-          <small>cierres registrados</small>
+          <small>efectivo contado</small>
         </div>
         <div className="cash-summary-card emphasis">
           <span>Diferencia</span>
@@ -218,7 +251,20 @@ export default function CashReports() {
         </div>
       </div>
 
-      <div className="table-container cash-report-table">
+      <div
+        ref={topScrollRef}
+        className="cash-report-top-scroll"
+        onScroll={() => syncHorizontalScroll('top')}
+        aria-label="Desplazamiento horizontal del reporte de cajas"
+      >
+        <div />
+      </div>
+
+      <div
+        ref={tableScrollRef}
+        className="table-container cash-report-table"
+        onScroll={() => syncHorizontalScroll('table')}
+      >
         <table>
           <thead>
             <tr>
@@ -228,9 +274,11 @@ export default function CashReports() {
               <th>Cierre</th>
               <th>Estado</th>
               <th>Ventas</th>
+              <th>Yape Calculado</th>
+              <th>Visa/Tarjeta Calculado</th>
+              <th>Efectivo Calculado</th>
+              <th>Efectivo Entregado</th>
               <th>Total Vendido</th>
-              <th>Monto Calculado</th>
-              <th>Monto Entregado</th>
               <th>Diferencia</th>
               <th>Resultado</th>
             </tr>
@@ -238,11 +286,11 @@ export default function CashReports() {
           <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={11} className="empty-cell">Cargando reporte...</td>
+                <td colSpan={13} className="empty-cell">Cargando reporte...</td>
               </tr>
             ) : registers.length === 0 ? (
               <tr>
-                <td colSpan={11} className="empty-cell">No hay cajas para los filtros seleccionados.</td>
+                <td colSpan={13} className="empty-cell">No hay cajas para los filtros seleccionados.</td>
               </tr>
             ) : (
               registers.map((register) => {
@@ -265,9 +313,11 @@ export default function CashReports() {
                       </span>
                     </td>
                     <td>{register.total_sales || 0}</td>
-                    <td>{formatCurrency(Number(register.total_amount || 0))}</td>
+                    <td>{formatCurrency(Number(register.yape_amount || 0))}</td>
+                    <td>{formatCurrency(Number(register.visa_amount || 0))}</td>
                     <td>{formatCurrency(expected)}</td>
                     <td>{delivered === null ? '-' : formatCurrency(delivered)}</td>
+                    <td>{formatCurrency(Number(register.total_amount || 0))}</td>
                     <td className={diff !== null && diff < 0 ? 'cash-amount-negative' : 'cash-amount-positive'}>
                       {diff === null ? '-' : formatCurrency(diff)}
                     </td>

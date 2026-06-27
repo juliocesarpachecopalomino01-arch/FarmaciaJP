@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "migrate": "tsx src/database/migrate.ts",
     "migrate-price-history": "tsx src/database/migrate-price-history.ts",
+    "generate-license-keys": "tsx src/scripts/generate-license-keys.ts",
     "generate-license": "tsx src/scripts/generate-license.ts",
     "setup-env": "node setup-env.js"
   },

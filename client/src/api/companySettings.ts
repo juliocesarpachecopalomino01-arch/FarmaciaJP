@@ -18,6 +18,7 @@ export interface CompanySettings {
   non_admin_history_days?: number;
   has_cash_reopen_password?: boolean;
   has_return_password?: boolean;
+  has_purchase_cancel_password?: boolean;
 }
 
 export type CompanySettingsPayload = Omit<Partial<CompanySettings>, 'show_logo' | 'show_qr'> & {
@@ -25,6 +26,7 @@ export type CompanySettingsPayload = Omit<Partial<CompanySettings>, 'show_logo' 
   show_qr?: boolean;
   cash_reopen_password?: string;
   return_password?: string;
+  purchase_cancel_password?: string;
 };
 
 export const companySettingsApi = {

@@ -27,6 +27,10 @@ export interface Purchase {
   cash_register_id?: number;
   can_edit?: boolean;
   can_delete?: boolean;
+  cancelled_at?: string | null;
+  cancelled_by_user_id?: number | null;
+  cancellation_number?: string | null;
+  cancellation_reason?: string | null;
   items?: PurchaseItemDetail[];
 }
 
@@ -89,8 +93,8 @@ export const purchasesApi = {
     return response.data;
   },
 
-  delete: async (id: number, password: string): Promise<{ message: string }> => {
-    const response = await api.delete(`/purchases/${id}`, { data: { password } });
+  delete: async (id: number, password: string, reason?: string): Promise<{ message: string; cancellation_number?: string }> => {
+    const response = await api.delete(`/purchases/${id}`, { data: { password, reason } });
     return response.data;
   },
 

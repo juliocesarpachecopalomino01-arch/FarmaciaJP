@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import os from 'os';
+import path from 'path';
 import { initializeDatabase } from './database/init';
 import authRoutes from './routes/auth';
 import productRoutes from './routes/products';
@@ -69,6 +70,13 @@ app.use('/api/product-presentations', productPresentationRoutes);
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Farmacia API is running' });
+});
+
+const clientDistPath = path.join(__dirname, '../../client/dist');
+app.use(express.static(clientDistPath));
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
 // Helper function to get local IP addresses

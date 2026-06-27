@@ -99,7 +99,7 @@ router.get('/', [
 
   if (search) {
     query += ` AND (
-      p.name LIKE ? OR p.barcode LIKE ? OR p.description LIKE ?
+      p.name LIKE ? OR p.barcode LIKE ? OR p.description LIKE ? OR c.name LIKE ?
       OR p.sanitary_registration LIKE ? OR p.lot_number LIKE ?
       OR p.presentation LIKE ? OR p.laboratory LIKE ?
       OR EXISTS (
@@ -110,7 +110,7 @@ router.get('/', [
       )
     )`;
     const searchTerm = `%${search}%`;
-    params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+    params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
   }
 
   if (category_id) {
@@ -151,7 +151,8 @@ router.get('/', [
 
     if (search) {
       countQuery += ` AND (
-        name LIKE ? OR barcode LIKE ? OR description LIKE ?
+        products.name LIKE ? OR products.barcode LIKE ? OR products.description LIKE ?
+        OR EXISTS (SELECT 1 FROM categories c WHERE c.id = products.category_id AND c.name LIKE ?)
         OR sanitary_registration LIKE ? OR lot_number LIKE ?
         OR presentation LIKE ? OR laboratory LIKE ?
         OR EXISTS (
@@ -162,7 +163,7 @@ router.get('/', [
         )
       )`;
       const searchTerm = `%${search}%`;
-      countParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      countParams.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     if (category_id) {

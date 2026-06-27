@@ -12,6 +12,7 @@ build/
 .env
 .env.local
 .env.production
+server/license-private-key.local.txt
 
 # Database
 *.db
