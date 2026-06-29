@@ -1,0 +1,22 @@
+﻿{
+    "name":  "farmacia-server",
+    "version":  "1.0.0",
+    "private":  true,
+    "main":  "dist/server.js",
+    "scripts":  {
+                    "start":  "node dist/server.js",
+                    "setup-env":  "node setup-env.js"
+                },
+    "dependencies":  {
+                         "express":  "^4.18.2",
+                         "cors":  "^2.8.5",
+                         "dotenv":  "^16.3.1",
+                         "bcryptjs":  "^2.4.3",
+                         "jsonwebtoken":  "^9.0.2",
+                         "sqlite3":  "^5.1.6",
+                         "express-validator":  "^7.0.1",
+                         "pdfkit":  "^0.14.0",
+                         "xlsx":  "^0.18.5",
+                         "qrcode":  "^1.5.3"
+                     }
+}

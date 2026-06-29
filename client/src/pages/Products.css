@@ -400,6 +400,28 @@ tbody tr:hover {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
+.products-table-scroll tbody tr {
+  cursor: pointer;
+}
+
+.products-table-scroll tbody tr.product-row-selected {
+  background: linear-gradient(90deg, rgba(254, 202, 202, 1), rgba(255, 237, 213, 0.96)) !important;
+  box-shadow:
+    inset 7px 0 0 #dc2626,
+    inset 0 0 0 1px rgba(220, 38, 38, 0.46),
+    0 8px 20px rgba(220, 38, 38, 0.24);
+}
+
+.products-table-scroll tbody tr.product-row-selected td {
+  background: transparent !important;
+  border-top: 1px solid rgba(220, 38, 38, 0.38);
+  border-bottom: 1px solid rgba(220, 38, 38, 0.38);
+}
+
+.products-table-scroll tbody tr.product-row-selected td:first-child {
+  color: #991b1b;
+}
+
 tbody tr:last-child td {
   border-bottom: none;
 }
@@ -1130,6 +1152,36 @@ tbody tr {
 .presentation-form h3 {
   margin: 0 0 0.65rem;
   font-size: 0.9rem;
+}
+
+.presentation-form-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.presentation-form-title h3 {
+  margin: 0;
+}
+
+.presentation-form-title .btn-link {
+  border: 0;
+  background: transparent;
+  color: #1d4ed8;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.presentation-form-title .btn-link:hover {
+  text-decoration: underline;
+}
+
+.presentation-row-editing td {
+  background: #fff1f2;
+  box-shadow: inset 3px 0 0 #ef4444;
 }
 
 .presentation-form .form-row > .form-group:only-child {

@@ -9,6 +9,9 @@ export interface PriceHistory {
   new_unit_price?: number;
   old_cost_price?: number;
   new_cost_price?: number;
+  presentation_id?: number;
+  presentation_name?: string;
+  change_source?: string;
   changed_by?: number;
   changed_by_name?: string;
   changed_by_full_name?: string;

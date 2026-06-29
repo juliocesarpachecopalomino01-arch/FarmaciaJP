@@ -7,6 +7,101 @@ import { logAction } from '../middleware/audit';
 const router = express.Router();
 
 const normalizeBoolean = (value: unknown) => (value ? 1 : 0);
+const normalizeNullableNumber = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return null;
+  return Number(value);
+};
+
+const recordPresentationPriceHistory = (
+  data: {
+    productId: number | string;
+    presentationId: number | string;
+    presentationName: string;
+    oldUnitPrice: number | null;
+    newUnitPrice: number;
+    oldCostPrice: number | null;
+    newCostPrice: number | null;
+    changedBy: number | null | undefined;
+    notes: string;
+    changeSource: string;
+  },
+  done: () => void
+) => {
+  db.run(
+    `UPDATE product_price_history
+     SET valid_until = CURRENT_TIMESTAMP
+     WHERE product_id = ? AND presentation_id = ? AND valid_until IS NULL`,
+    [data.productId, data.presentationId],
+    () => {
+      db.run(
+        `INSERT INTO product_price_history
+         (product_id, presentation_id, presentation_name, old_unit_price, new_unit_price, old_cost_price, new_cost_price, changed_by, notes, change_source, valid_from)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+        [
+          data.productId,
+          data.presentationId,
+          data.presentationName,
+          data.oldUnitPrice,
+          data.newUnitPrice,
+          data.oldCostPrice,
+          data.newCostPrice,
+          data.changedBy || null,
+          data.notes,
+          data.changeSource,
+        ],
+        () => done()
+      );
+    }
+  );
+};
+
+const syncProductPriceFromPresentation = (
+  productId: number | string,
+  presentation: any,
+  userId: number | null | undefined,
+  historyNote: string,
+  forceHistory: boolean,
+  done: () => void
+) => {
+  db.get('SELECT unit_price, cost_price FROM products WHERE id = ?', [productId], (err, product: any) => {
+    if (err || !product) return done();
+
+    const newUnitPrice = Number(presentation.unit_price || 0);
+    const newCostPrice = normalizeNullableNumber(presentation.cost_price);
+    const oldUnitPrice = Number(product.unit_price || 0);
+    const oldCostPrice = normalizeNullableNumber(product.cost_price);
+    const priceChanged = newUnitPrice !== oldUnitPrice;
+    const costChanged = newCostPrice !== oldCostPrice;
+
+    const finishSync = () => {
+      db.run(
+        `UPDATE products
+         SET unit_price = ?, cost_price = ?, presentation = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [newUnitPrice, newCostPrice, presentation.name || null, productId],
+        () => done()
+      );
+    };
+
+    if (!priceChanged && !costChanged && !forceHistory) return finishSync();
+
+    recordPresentationPriceHistory(
+      {
+        productId,
+        presentationId: presentation.id,
+        presentationName: presentation.name || 'Presentacion',
+        oldUnitPrice,
+        newUnitPrice,
+        oldCostPrice,
+        newCostPrice,
+        changedBy: userId,
+        notes: historyNote,
+        changeSource: 'presentation',
+      },
+      finishSync
+    );
+  });
+};
 
 router.get('/types', authenticateToken, (_req, res) => {
   db.all(
@@ -138,7 +233,37 @@ router.post('/product/:productId', authenticateToken, [
       function(err) {
         if (err) return res.status(500).json({ error: 'Database error' });
         logAction(req.user?.id || null, 'CREATE', 'product_presentation', this.lastID, null, req.body, req);
-        res.status(201).json({ id: this.lastID, message: 'Presentacion creada correctamente' });
+        const insertedId = this.lastID;
+        const createdPresentation = {
+          id: insertedId,
+          product_id: productId,
+          name: String(name).trim(),
+          unit_price: Number(unit_price),
+          cost_price: cost_price !== undefined && cost_price !== '' ? Number(cost_price) : null,
+        };
+
+        if (normalizeBoolean(is_default)) {
+          syncProductPriceFromPresentation(productId, createdPresentation, req.user?.id, `Presentacion creada como principal: ${createdPresentation.name}`, true, () => {
+            res.status(201).json({ id: insertedId, message: 'Presentacion creada correctamente' });
+          });
+          return;
+        }
+
+        recordPresentationPriceHistory(
+          {
+            productId,
+            presentationId: insertedId,
+            presentationName: createdPresentation.name,
+            oldUnitPrice: null,
+            newUnitPrice: createdPresentation.unit_price,
+            oldCostPrice: null,
+            newCostPrice: createdPresentation.cost_price,
+            changedBy: req.user?.id,
+            notes: `Presentacion creada: ${createdPresentation.name}`,
+            changeSource: 'presentation',
+          },
+          () => res.status(201).json({ id: insertedId, message: 'Presentacion creada correctamente' })
+        );
       }
     );
   };
@@ -184,6 +309,47 @@ router.put('/:id', authenticateToken, [
       db.run(`UPDATE product_presentations SET ${updates.join(', ')} WHERE id = ?`, params, function(err) {
         if (err) return res.status(500).json({ error: 'Database error' });
         logAction(req.user?.id || null, 'UPDATE', 'product_presentation', Number(id), current, req.body, req);
+
+        const updatedPresentation = {
+          ...current,
+          ...req.body,
+          presentation_type_id: req.body.presentation_type_id !== undefined ? (req.body.presentation_type_id || null) : current.presentation_type_id,
+          cost_price: req.body.cost_price !== undefined ? normalizeNullableNumber(req.body.cost_price) : current.cost_price,
+          unit_price: req.body.unit_price !== undefined ? Number(req.body.unit_price) : current.unit_price,
+          is_default: req.body.is_default !== undefined ? normalizeBoolean(req.body.is_default) : current.is_default,
+          is_active: req.body.is_active !== undefined ? normalizeBoolean(req.body.is_active) : current.is_active,
+        };
+        const priceChanged = req.body.unit_price !== undefined && Number(req.body.unit_price) !== Number(current.unit_price || 0);
+        const costChanged = req.body.cost_price !== undefined && normalizeNullableNumber(req.body.cost_price) !== normalizeNullableNumber(current.cost_price);
+        const presentationChanged = req.body.name !== undefined && req.body.name !== current.name;
+        const forceHistory = priceChanged || costChanged || presentationChanged || req.body.conversion_factor !== undefined || req.body.is_default !== undefined || req.body.is_active !== undefined;
+
+        if (Number(updatedPresentation.is_default) === 1) {
+          syncProductPriceFromPresentation(current.product_id, updatedPresentation, req.user?.id, `Cambio en presentacion principal: ${updatedPresentation.name}`, forceHistory, () => {
+            res.json({ message: 'Presentacion actualizada correctamente' });
+          });
+          return;
+        }
+
+        if (forceHistory) {
+          recordPresentationPriceHistory(
+            {
+              productId: current.product_id,
+              presentationId: current.id,
+              presentationName: updatedPresentation.name || current.name,
+              oldUnitPrice: Number(current.unit_price || 0),
+              newUnitPrice: Number(updatedPresentation.unit_price || 0),
+              oldCostPrice: normalizeNullableNumber(current.cost_price),
+              newCostPrice: normalizeNullableNumber(updatedPresentation.cost_price),
+              changedBy: req.user?.id,
+              notes: `Cambio en presentacion: ${updatedPresentation.name || current.name}`,
+              changeSource: 'presentation',
+            },
+            () => res.json({ message: 'Presentacion actualizada correctamente' })
+          );
+          return;
+        }
+
         res.json({ message: 'Presentacion actualizada correctamente' });
       });
     };

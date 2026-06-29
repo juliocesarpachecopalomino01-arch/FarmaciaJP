@@ -627,9 +627,10 @@ router.post('/', authenticateToken, [
 
         // Record initial price in history (valid_from = now, valid_until = NULL means current price)
         db.run(
-          `INSERT INTO product_price_history (product_id, old_unit_price, new_unit_price, old_cost_price, new_cost_price, changed_by, notes, valid_from, valid_until)
-           VALUES (?, NULL, ?, NULL, ?, ?, 'Precio inicial al crear producto', CURRENT_TIMESTAMP, NULL)`,
-          [productId, unit_price, cost_price || null, req.user?.id || null],
+          `INSERT INTO product_price_history
+           (product_id, presentation_name, old_unit_price, new_unit_price, old_cost_price, new_cost_price, changed_by, notes, change_source, valid_from, valid_until)
+           VALUES (?, ?, NULL, ?, NULL, ?, ?, 'Precio inicial al crear producto', 'product', CURRENT_TIMESTAMP, NULL)`,
+          [productId, presentation || 'Unidad', unit_price, cost_price || null, req.user?.id || null],
           () => {} // Don't wait for this
         );
 
@@ -743,7 +744,13 @@ router.put('/:id', authenticateToken, [
   params.push(id);
 
   // Get current product data before update to track price changes
-  db.get('SELECT unit_price, cost_price FROM products WHERE id = ?', [id], (err, currentProduct: any) => {
+  db.get(
+    `SELECT p.unit_price, p.cost_price, pp.id as presentation_id, pp.name as presentation_name
+     FROM products p
+     LEFT JOIN product_presentations pp ON pp.product_id = p.id AND pp.is_default = 1
+     WHERE p.id = ?`,
+    [id],
+    (err, currentProduct: any) => {
     if (err) {
       return res.status(500).json({ error: 'Database error' });
     }
@@ -781,22 +788,28 @@ router.put('/:id', authenticateToken, [
             `UPDATE product_price_history 
              SET valid_until = CURRENT_TIMESTAMP 
              WHERE product_id = ? 
-             AND valid_until IS NULL`,
-            [id],
+             AND valid_until IS NULL
+             AND (presentation_id = ? OR presentation_id IS NULL)`,
+            [id, currentProduct.presentation_id || null],
             () => {
               // Then, insert the new price record
               // Always save the old prices/costs before the change, and new prices/costs after
               // This ensures we have a complete record of what changed
               db.run(
-                `INSERT INTO product_price_history (product_id, old_unit_price, new_unit_price, old_cost_price, new_cost_price, changed_by, valid_from)
-                 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+                `INSERT INTO product_price_history
+                 (product_id, presentation_id, presentation_name, old_unit_price, new_unit_price, old_cost_price, new_cost_price, changed_by, notes, change_source, valid_from)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
                 [
                   id,
+                  currentProduct.presentation_id || null,
+                  currentProduct.presentation_name || presentation || null,
                   oldUnitPrice, // Always save the old price (before update)
                   newUnitPrice, // Save the new price (after update)
                   oldCostPrice || null, // Always save the old cost (before update, or null if didn't exist)
                   newCostPrice || null, // Save the new cost (after update, or null if doesn't exist)
                   req.user?.id || null,
+                  'Cambio desde ficha de producto',
+                  'product',
                 ],
                 () => {} // Don't wait for this, just log it
               );
@@ -804,10 +817,25 @@ router.put('/:id', authenticateToken, [
           );
         }
 
-        // Log audit
-        logAction(req.user?.id || null, 'UPDATE', 'product', Number(id), currentProduct, req.body, req);
+        const finishUpdate = () => {
+          // Log audit
+          logAction(req.user?.id || null, 'UPDATE', 'product', Number(id), currentProduct, req.body, req);
 
-        res.json({ message: 'Product updated successfully' });
+          res.json({ message: 'Product updated successfully' });
+        };
+
+        if (priceChanged || costChanged || presentation !== undefined) {
+          db.run(
+            `UPDATE product_presentations
+             SET unit_price = ?, cost_price = ?, name = COALESCE(NULLIF(?, ''), name), updated_at = CURRENT_TIMESTAMP
+             WHERE product_id = ? AND is_default = 1`,
+            [newUnitPrice, newCostPrice || null, presentation || null, id],
+            () => finishUpdate()
+          );
+          return;
+        }
+
+        finishUpdate();
       }
     );
   });

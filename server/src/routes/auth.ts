@@ -55,7 +55,10 @@ router.post('/login', [
     const { username, password } = req.body;
 
     db.get(
-      'SELECT * FROM users WHERE username = ? AND is_active = 1',
+      `SELECT u.*, COALESCE(w.full_name, u.full_name) as display_full_name
+       FROM users u
+       LEFT JOIN workers w ON w.id = u.worker_id
+       WHERE u.username = ? AND u.is_active = 1`,
       [username],
       async (err, user: any) => {
         if (err) {
@@ -84,7 +87,7 @@ router.post('/login', [
             id: user.id,
             username: user.username,
             email: user.email,
-            full_name: user.full_name,
+            full_name: user.display_full_name || user.full_name,
             role: user.role,
             permissions,
           },
@@ -153,7 +156,10 @@ router.get('/me', async (req, res) => {
     }
 
     db.get(
-      'SELECT id, username, email, full_name, role FROM users WHERE id = ?',
+      `SELECT u.id, u.username, u.email, COALESCE(w.full_name, u.full_name) as full_name, u.role
+       FROM users u
+       LEFT JOIN workers w ON w.id = u.worker_id
+       WHERE u.id = ?`,
       [decoded.id],
       async (err, user: any) => {
         if (err) {

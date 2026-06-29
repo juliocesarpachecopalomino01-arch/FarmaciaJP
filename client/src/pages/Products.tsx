@@ -107,6 +107,7 @@ export default function Products() {
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [editingPresentationId, setEditingPresentationId] = useState<number | null>(null);
   const [presentationForm, setPresentationForm] = useState({
     presentation_type_id: '',
     conversion_factor: '1',
@@ -132,6 +133,17 @@ export default function Products() {
   });
 
   const queryClient = useQueryClient();
+
+  const resetPresentationForm = (product?: Product | null) => {
+    setEditingPresentationId(null);
+    setPresentationForm({
+      presentation_type_id: '',
+      conversion_factor: '1',
+      unit_price: product?.unit_price?.toString() || '',
+      cost_price: product?.cost_price?.toString() || '',
+      is_default: false,
+    });
+  };
 
   const { data: productsData } = useQuery(['products', search, categoryFilter, statusFilter, quickFilter, currentPage], () =>
     productsApi.getAll({
@@ -214,13 +226,7 @@ export default function Products() {
       onSuccess: () => {
         queryClient.invalidateQueries(['product-presentations', selectedProductId]);
         queryClient.invalidateQueries('products');
-        setPresentationForm({
-          presentation_type_id: '',
-          conversion_factor: '1',
-          unit_price: '',
-          cost_price: '',
-          is_default: false,
-        });
+        resetPresentationForm(selectedProduct);
       },
       onError: (error: any) => {
         alert(error?.response?.data?.error || 'Error al guardar la presentación');
@@ -235,6 +241,7 @@ export default function Products() {
       onSuccess: () => {
         queryClient.invalidateQueries(['product-presentations', selectedProductId]);
         queryClient.invalidateQueries('products');
+        resetPresentationForm(selectedProduct);
       },
       onError: (error: any) => {
         alert(error?.response?.data?.error || 'Error al actualizar la presentación');
@@ -262,6 +269,8 @@ export default function Products() {
   };
 
   const handleEdit = (product: Product) => {
+    setSelectedProductId(product.id);
+    setSelectedProduct(product);
     setEditingProduct(product);
     setFormData({
       name: product.name,
@@ -283,6 +292,8 @@ export default function Products() {
   };
 
   const handleToggleActive = (product: Product) => {
+    setSelectedProductId(product.id);
+    setSelectedProduct(product);
     const newActive = product.is_active === 1 ? 0 : 1;
     const action = newActive ? 'activar' : 'desactivar';
     if (window.confirm(`¿Está seguro de ${action} el producto "${product.name}"?`)) {
@@ -307,17 +318,11 @@ export default function Products() {
   const handleShowPresentations = (product: Product) => {
     setSelectedProductId(product.id);
     setSelectedProduct(product);
-    setPresentationForm({
-      presentation_type_id: '',
-      conversion_factor: '1',
-      unit_price: product.unit_price?.toString() || '',
-      cost_price: product.cost_price?.toString() || '',
-      is_default: false,
-    });
+    resetPresentationForm(product);
     setShowPresentationsModal(true);
   };
 
-  const handleCreatePresentation = (e: React.FormEvent) => {
+  const handleSavePresentation = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedProductId) return;
     const selectedType = activePresentationTypes.find((type) => type.id === Number(presentationForm.presentation_type_id));
@@ -326,16 +331,37 @@ export default function Products() {
       return;
     }
 
+    const payload = {
+      presentation_type_id: selectedType.id,
+      name: selectedType.name,
+      conversion_factor: Number(presentationForm.conversion_factor || 1),
+      unit_price: Number(presentationForm.unit_price || 0),
+      cost_price: presentationForm.cost_price ? Number(presentationForm.cost_price) : undefined,
+      is_default: presentationForm.is_default ? 1 : 0,
+    };
+
+    if (editingPresentationId) {
+      updatePresentationMutation.mutate({
+        id: editingPresentationId,
+        presentation: payload,
+      });
+      return;
+    }
+
     createPresentationMutation.mutate({
       productId: selectedProductId,
-      presentation: {
-        presentation_type_id: selectedType.id,
-        name: selectedType.name,
-        conversion_factor: Number(presentationForm.conversion_factor || 1),
-        unit_price: Number(presentationForm.unit_price || 0),
-        cost_price: presentationForm.cost_price ? Number(presentationForm.cost_price) : undefined,
-        is_default: presentationForm.is_default ? 1 : 0,
-      },
+      presentation: payload,
+    });
+  };
+
+  const handleEditPresentation = (presentation: any) => {
+    setEditingPresentationId(presentation.id);
+    setPresentationForm({
+      presentation_type_id: presentation.presentation_type_id ? String(presentation.presentation_type_id) : '',
+      conversion_factor: String(presentation.conversion_factor || 1),
+      unit_price: String(presentation.unit_price ?? ''),
+      cost_price: presentation.cost_price !== null && presentation.cost_price !== undefined ? String(presentation.cost_price) : '',
+      is_default: Number(presentation.is_default) === 1,
     });
   };
 
@@ -589,7 +615,14 @@ export default function Products() {
             </thead>
             <tbody>
               {products.map((product) => (
-              <tr key={product.id}>
+              <tr
+                key={product.id}
+                className={selectedProductId === product.id ? 'product-row-selected' : undefined}
+                onClick={() => {
+                  setSelectedProductId(product.id);
+                  setSelectedProduct(product);
+                }}
+              >
                 <td>
                   <div className="product-name">{product.name}</div>
                   {product.description && (
@@ -882,7 +915,7 @@ export default function Products() {
       )}
 
       {showPresentationsModal && selectedProduct && (
-        <div className="modal-overlay" onClick={() => { setShowPresentationsModal(false); setSelectedProductId(null); setSelectedProduct(null); }}>
+        <div className="modal-overlay" onClick={() => { setShowPresentationsModal(false); setSelectedProductId(null); setSelectedProduct(null); resetPresentationForm(null); }}>
           <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
             <h2>Presentaciones de Venta</h2>
             <p className="modal-subtitle">
@@ -907,7 +940,7 @@ export default function Products() {
                   <tbody>
                     {productPresentations.length > 0 ? (
                       productPresentations.map((presentation) => (
-                        <tr key={presentation.id}>
+                        <tr key={presentation.id} className={editingPresentationId === presentation.id ? 'presentation-row-editing' : undefined}>
                           <td>
                             <strong>{presentation.name}</strong>
                             {presentation.type_name && <small className="table-subtext">{presentation.type_name}</small>}
@@ -934,6 +967,14 @@ export default function Products() {
                           <td>
                             <button
                               type="button"
+                              className="btn-icon action-edit"
+                              title="Editar presentacion"
+                              onClick={() => handleEditPresentation(presentation)}
+                            >
+                              <Edit size={15} />
+                            </button>
+                            <button
+                              type="button"
                               className="btn-icon action-toggle"
                               title={presentation.is_active ? 'Desactivar presentación' : 'Activar presentación'}
                               disabled={updatePresentationMutation.isLoading}
@@ -953,8 +994,15 @@ export default function Products() {
                 </table>
               </div>
 
-              <form className="presentation-form" onSubmit={handleCreatePresentation}>
-                <h3>Nueva presentación</h3>
+              <form className="presentation-form" onSubmit={handleSavePresentation}>
+                <div className="presentation-form-title">
+                  <h3>{editingPresentationId ? 'Editar presentación' : 'Nueva presentación'}</h3>
+                  {editingPresentationId && (
+                    <button type="button" className="btn-link" onClick={() => resetPresentationForm(selectedProduct)}>
+                      Cancelar edición
+                    </button>
+                  )}
+                </div>
                 <div className="form-row">
                   <div className="form-group">
                     <label>Tipo</label>
@@ -1018,15 +1066,15 @@ export default function Products() {
                   />
                   Usar como presentación principal en ventas
                 </label>
-                <button type="submit" className="btn-primary" disabled={createPresentationMutation.isLoading}>
+                <button type="submit" className="btn-primary" disabled={createPresentationMutation.isLoading || updatePresentationMutation.isLoading}>
                   <Plus size={14} />
-                  Agregar presentación
+                  {editingPresentationId ? 'Guardar presentación' : 'Agregar presentación'}
                 </button>
               </form>
             </div>
 
             <div className="modal-actions">
-              <button type="button" className="btn-secondary" onClick={() => { setShowPresentationsModal(false); setSelectedProductId(null); setSelectedProduct(null); }}>
+              <button type="button" className="btn-secondary" onClick={() => { setShowPresentationsModal(false); setSelectedProductId(null); setSelectedProduct(null); resetPresentationForm(null); }}>
                 Cerrar
               </button>
             </div>
@@ -1051,6 +1099,7 @@ export default function Products() {
                 <table className="history-table">
                   <thead>
                     <tr>
+                      <th>Presentación</th>
                       <th>Precio Venta Anterior</th>
                       <th>Precio Venta Nuevo</th>
                       <th>Precio Compra Anterior</th>
@@ -1070,6 +1119,12 @@ export default function Products() {
                       
                       return (
                         <tr key={entry.id} className={isCurrent ? 'current-price' : ''}>
+                          <td>
+                            <strong>{entry.presentation_name || selectedProduct?.presentation || 'Unidad'}</strong>
+                            <small className="table-subtext">
+                              {entry.change_source === 'product' ? 'Ficha producto' : 'Presentaciones'}
+                            </small>
+                          </td>
                           <td>
                             {entry.old_unit_price !== null && entry.old_unit_price !== undefined 
                               ? `S/ ${entry.old_unit_price.toFixed(2)}` 

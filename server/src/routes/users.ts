@@ -148,6 +148,27 @@ router.put('/workers/:id', authenticateToken, requireRole('admin'), [
   try {
     const result = await run(`UPDATE workers SET ${updates.join(', ')} WHERE id = ?`, params);
     if (result.changes === 0) return res.status(404).json({ error: 'Trabajador no encontrado' });
+    if (req.body.full_name !== undefined || req.body.email !== undefined || req.body.is_active !== undefined) {
+      const userUpdates: string[] = [];
+      const userParams: any[] = [];
+      if (req.body.full_name !== undefined) {
+        userUpdates.push('full_name = ?');
+        userParams.push(req.body.full_name);
+      }
+      if (req.body.email !== undefined) {
+        userUpdates.push('email = ?');
+        userParams.push(req.body.email || `${id}@local`);
+      }
+      if (req.body.is_active !== undefined) {
+        userUpdates.push('is_active = ?');
+        userParams.push(req.body.is_active ? 1 : 0);
+      }
+      if (userUpdates.length > 0) {
+        userUpdates.push('updated_at = CURRENT_TIMESTAMP');
+        userParams.push(id);
+        await run(`UPDATE users SET ${userUpdates.join(', ')} WHERE worker_id = ?`, userParams);
+      }
+    }
     res.json({ message: 'Trabajador actualizado correctamente' });
   } catch (err) {
     handleDbError(res, err);
@@ -273,7 +294,7 @@ router.post('/', authenticateToken, requireRole('admin'), [
 router.get('/', authenticateToken, requireRole('admin'), async (_req, res) => {
   try {
     const users = await all(`
-      SELECT u.id, u.username, u.email, u.full_name, u.role, u.worker_id, u.profile_id,
+      SELECT u.id, u.username, u.email, COALESCE(w.full_name, u.full_name) as full_name, u.role, u.worker_id, u.profile_id,
              u.is_active, u.created_at, w.full_name as worker_name, w.document_number,
              p.name as profile_name
       FROM users u
@@ -294,7 +315,7 @@ router.get('/:id', authenticateToken, async (req: AuthRequest, res) => {
   }
   try {
     const user = await get(`
-      SELECT u.id, u.username, u.email, u.full_name, u.role, u.worker_id, u.profile_id,
+      SELECT u.id, u.username, u.email, COALESCE(w.full_name, u.full_name) as full_name, u.role, u.worker_id, u.profile_id,
              u.is_active, u.created_at, w.full_name as worker_name, p.name as profile_name
       FROM users u
       LEFT JOIN workers w ON w.id = u.worker_id
@@ -325,7 +346,20 @@ router.put('/:id', authenticateToken, [
   const params: any[] = [];
   if (email !== undefined) { updates.push('email = ?'); params.push(email); }
   if (full_name !== undefined) { updates.push('full_name = ?'); params.push(full_name); }
-  if (worker_id !== undefined && req.user!.role === 'admin') { updates.push('worker_id = ?'); params.push(worker_id || null); }
+  if (worker_id !== undefined && req.user!.role === 'admin') {
+    updates.push('worker_id = ?');
+    params.push(worker_id || null);
+    if (worker_id) {
+      const worker = await get<any>('SELECT full_name, email FROM workers WHERE id = ?', [worker_id]);
+      if (!worker) return res.status(400).json({ error: 'Trabajador no encontrado' });
+      updates.push('full_name = ?');
+      params.push(worker.full_name);
+      if (worker.email) {
+        updates.push('email = ?');
+        params.push(worker.email);
+      }
+    }
+  }
   if (profile_id !== undefined && req.user!.role === 'admin') {
     const profile = await get<any>('SELECT role FROM user_profiles WHERE id = ?', [profile_id]);
     if (!profile) return res.status(400).json({ error: 'Perfil no encontrado' });

@@ -176,6 +176,12 @@ async function runCriticalMigrations(): Promise<void> {
     ['stock_quantity', 'INTEGER']
   ]);
 
+  await ensureColumns('product_price_history', [
+    ['presentation_id', 'INTEGER'],
+    ['presentation_name', 'TEXT'],
+    ['change_source', 'TEXT']
+  ]);
+
   await runDb(`
     INSERT INTO product_presentations (product_id, presentation_type_id, name, barcode, conversion_factor, unit_price, cost_price, is_default, is_active)
     SELECT
@@ -191,6 +197,48 @@ async function runCriticalMigrations(): Promise<void> {
     FROM products p
     WHERE NOT EXISTS (
       SELECT 1 FROM product_presentations pp WHERE pp.product_id = p.id
+    )
+  `);
+
+  await runDb(`
+    UPDATE product_presentations
+    SET
+      unit_price = COALESCE((SELECT p.unit_price FROM products p WHERE p.id = product_presentations.product_id), unit_price),
+      cost_price = (SELECT p.cost_price FROM products p WHERE p.id = product_presentations.product_id),
+      name = COALESCE(NULLIF((SELECT p.presentation FROM products p WHERE p.id = product_presentations.product_id), ''), name),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE is_default = 1
+      AND EXISTS (
+        SELECT 1
+        FROM products p
+        WHERE p.id = product_presentations.product_id
+          AND (
+            COALESCE(p.unit_price, 0) != COALESCE(product_presentations.unit_price, 0)
+            OR COALESCE(p.cost_price, -1) != COALESCE(product_presentations.cost_price, -1)
+          )
+      )
+  `);
+
+  await runDb(`
+    INSERT INTO product_price_history
+      (product_id, presentation_id, presentation_name, old_unit_price, new_unit_price, old_cost_price, new_cost_price, changed_by, notes, change_source, valid_from)
+    SELECT
+      pp.product_id,
+      pp.id,
+      pp.name,
+      NULL,
+      COALESCE(pp.unit_price, 0),
+      NULL,
+      pp.cost_price,
+      NULL,
+      'Registro inicial de presentacion existente',
+      'presentation',
+      COALESCE(pp.created_at, CURRENT_TIMESTAMP)
+    FROM product_presentations pp
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM product_price_history ph
+      WHERE ph.presentation_id = pp.id
     )
   `);
 
@@ -520,6 +568,9 @@ export function initializeDatabase(): Promise<void> {
           new_unit_price REAL NOT NULL,
           old_cost_price REAL,
           new_cost_price REAL,
+          presentation_id INTEGER,
+          presentation_name TEXT,
+          change_source TEXT,
           changed_by INTEGER,
           notes TEXT,
           valid_from DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -899,6 +950,30 @@ export function initializeDatabase(): Promise<void> {
             UPDATE users
             SET profile_id = CASE WHEN role = 'admin' THEN 1 ELSE 2 END
             WHERE profile_id IS NULL
+          `);
+          db.run(`
+            UPDATE users
+            SET full_name = (
+              SELECT w.full_name FROM workers w WHERE w.id = users.worker_id LIMIT 1
+            ),
+            email = COALESCE(
+              NULLIF((SELECT w.email FROM workers w WHERE w.id = users.worker_id LIMIT 1), ''),
+              users.email
+            ),
+            updated_at = CURRENT_TIMESTAMP
+            WHERE worker_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM workers w
+                WHERE w.id = users.worker_id
+                  AND (
+                    COALESCE(users.full_name, '') != COALESCE(w.full_name, '')
+                    OR (
+                      w.email IS NOT NULL
+                      AND w.email != ''
+                      AND COALESCE(users.email, '') != w.email
+                    )
+                  )
+              )
           `);
         };
 
