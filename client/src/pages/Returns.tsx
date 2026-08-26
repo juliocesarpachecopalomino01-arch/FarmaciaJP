@@ -6,7 +6,7 @@ import { returnsApi, CreateReturnRequest } from '../api/returns';
 import { salesApi } from '../api/sales';
 import { companySettingsApi } from '../api/companySettings';
 import { paymentMethodsApi } from '../api/paymentMethods';
-import { Download, Filter, Plus, RotateCcw, Search } from 'lucide-react';
+import { Download, Filter, Plus, RotateCcw, Search, X } from 'lucide-react';
 import { format } from 'date-fns';
 import './Returns.css';
 
@@ -21,6 +21,12 @@ const getDateOffset = (daysOffset: number) => {
   const date = new Date(Date.UTC(year, month - 1, day));
   date.setUTCDate(date.getUTCDate() + daysOffset);
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+};
+
+type RefundSplitRow = {
+  id: string;
+  payment_method: string;
+  amount: string;
 };
 
 export default function Returns() {
@@ -42,6 +48,8 @@ export default function Returns() {
     notes: '',
     password: '',
   });
+  const [isMixedRefund, setIsMixedRefund] = useState(false);
+  const [refundSplits, setRefundSplits] = useState<RefundSplitRow[]>([]);
   const [filters, setFilters] = useState({
     start_date: getToday(),
     end_date: getToday(),
@@ -105,6 +113,8 @@ export default function Returns() {
       notes: '',
       password: '',
     });
+    setIsMixedRefund(false);
+    setRefundSplits([]);
   };
 
   const handleSaleSelect = (saleId: number) => {
@@ -117,6 +127,8 @@ export default function Returns() {
       const defaultRefundMethod = sale.payment_method === 'mixed'
         ? sale.payment_details?.[0]?.payment_method || 'cash'
         : sale.payment_method || 'cash';
+      setIsMixedRefund(false);
+      setRefundSplits([]);
       setReturnForm((prev) => ({
         ...prev,
         refund_payment_method: defaultRefundMethod,
@@ -145,6 +157,70 @@ export default function Returns() {
     ));
   };
 
+  const calculateReturnTotal = () => {
+    return returnItems.reduce((sum, item) => {
+      const unitPrice = selectedSale?.items?.find((si: any) => si.id === item.sale_item_id)?.unit_price || 0;
+      return sum + (unitPrice * item.quantity);
+    }, 0);
+  };
+
+  const getRemainingRefundAmount = () => {
+    const refunded = refundSplits.reduce((sum, split) => sum + (Number(split.amount) || 0), 0);
+    return Math.round((calculateReturnTotal() - refunded) * 100) / 100;
+  };
+
+  const startMixedRefund = () => {
+    const total = calculateReturnTotal();
+    const paidMethods = selectedSale?.payment_details?.map((payment) => payment.payment_method) || [];
+    const firstMethod = paidMethods[0] || returnForm.refund_payment_method || selectedSale?.payment_method || paymentMethods[0]?.value || 'cash';
+    const secondMethod = paidMethods.find((method) => method !== firstMethod)
+      || paymentMethods.find((method) => method.value !== firstMethod)?.value
+      || firstMethod;
+
+    setIsMixedRefund(true);
+    setRefundSplits([
+      {
+        id: `${Date.now()}-0`,
+        payment_method: firstMethod,
+        amount: total > 0 ? total.toFixed(2) : '',
+      },
+      {
+        id: `${Date.now()}-1`,
+        payment_method: secondMethod,
+        amount: '',
+      },
+    ]);
+    setReturnForm((current) => ({ ...current, refund_payment_method: 'mixed' }));
+  };
+
+  const stopMixedRefund = (paymentMethod: string) => {
+    setIsMixedRefund(false);
+    setRefundSplits([]);
+    setReturnForm((current) => ({ ...current, refund_payment_method: paymentMethod }));
+  };
+
+  const addRefundSplit = () => {
+    const remaining = getRemainingRefundAmount();
+    setRefundSplits((current) => [
+      ...current,
+      {
+        id: `${Date.now()}-${current.length}`,
+        payment_method: paymentMethods[0]?.value || 'cash',
+        amount: remaining > 0 ? remaining.toFixed(2) : '',
+      },
+    ]);
+  };
+
+  const updateRefundSplit = (id: string, field: keyof RefundSplitRow, value: string) => {
+    setRefundSplits((current) => current.map((split) => (
+      split.id === id ? { ...split, [field]: value } : split
+    )));
+  };
+
+  const removeRefundSplit = (id: string) => {
+    setRefundSplits((current) => current.filter((split) => split.id !== id));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSaleId) return;
@@ -155,13 +231,38 @@ export default function Returns() {
       return;
     }
 
+    const total = calculateReturnTotal();
+    if (isMixedRefund) {
+      const totalRefunded = refundSplits.reduce((sum, split) => sum + (Number(split.amount) || 0), 0);
+      if (refundSplits.length < 2) {
+        alert('Agrega al menos dos metodos para usar devolucion mixta.');
+        return;
+      }
+      if (refundSplits.some((split) => !split.payment_method || (Number(split.amount) || 0) <= 0)) {
+        alert('Cada metodo de devolucion debe tener un monto mayor a cero.');
+        return;
+      }
+      if (Math.round(totalRefunded * 100) !== Math.round(total * 100)) {
+        alert('La suma de la devolucion mixta debe cuadrar con el total a reembolsar.');
+        return;
+      }
+    }
+
     const returnData: CreateReturnRequest = {
       sale_id: selectedSaleId,
       items: itemsToReturn.map(item => ({
         sale_item_id: item.sale_item_id,
         quantity: item.quantity,
       })),
-      refund_payment_method: returnForm.refund_payment_method || selectedSale?.payment_details?.[0]?.payment_method || selectedSale?.payment_method || 'cash',
+      refund_payment_method: isMixedRefund
+        ? 'mixed'
+        : returnForm.refund_payment_method || selectedSale?.payment_details?.[0]?.payment_method || selectedSale?.payment_method || 'cash',
+      refund_details: isMixedRefund
+        ? refundSplits.map((split) => ({
+            payment_method: split.payment_method,
+            amount: Number(split.amount) || 0,
+          }))
+        : undefined,
       reason: returnForm.reason || undefined,
       notes: returnForm.notes || undefined,
       password: returnForm.password || undefined,
@@ -183,6 +284,12 @@ export default function Returns() {
   const returns = returnsData || [];
   const availableSales = salesData?.sales || [];
   const paymentMethods = paymentMethodsData || [];
+  const returnTotal = calculateReturnTotal();
+  const remainingRefundAmount = getRemainingRefundAmount();
+  const isMixedRefundValid =
+    refundSplits.length >= 2
+    && refundSplits.every((split) => split.payment_method && (Number(split.amount) || 0) > 0)
+    && Math.round(refundSplits.reduce((sum, split) => sum + (Number(split.amount) || 0), 0) * 100) === Math.round(returnTotal * 100);
   const filteredAvailableSales = useMemo(() => {
     const needle = saleSearch.trim().toLowerCase();
     if (!needle) return availableSales;
@@ -278,7 +385,7 @@ export default function Returns() {
                 <td>{returnItem.sale_number}</td>
                 <td>{returnItem.customer_name || 'Cliente General'}</td>
                 <td>${returnItem.total_amount.toFixed(2)}</td>
-                <td>{returnItem.refund_payment_method_name || returnItem.refund_payment_method || '-'}</td>
+                <td>{returnItem.refund_detail || returnItem.refund_payment_method_name || returnItem.refund_payment_method || '-'}</td>
                 <td>{returnItem.reason || '-'}</td>
                 <td>{format(new Date(returnItem.created_at), 'dd/MM/yyyy HH:mm')}</td>
               </tr>
@@ -341,14 +448,21 @@ export default function Returns() {
                 <div className="form-group">
                   <label>Metodo de Devolucion del Dinero</label>
                   <select
-                    value={returnForm.refund_payment_method || selectedSale.payment_method || 'cash'}
-                    onChange={(e) => setReturnForm({ ...returnForm, refund_payment_method: e.target.value })}
+                    value={isMixedRefund ? 'mixed' : returnForm.refund_payment_method || selectedSale.payment_method || 'cash'}
+                    onChange={(e) => {
+                      if (e.target.value === 'mixed') {
+                        startMixedRefund();
+                        return;
+                      }
+                      stopMixedRefund(e.target.value);
+                    }}
                   >
                     {paymentMethods.map((method) => (
                       <option key={method.value} value={method.value}>
                         {method.name}{method.value === selectedSale.payment_method || selectedSale.payment_details?.some((payment) => payment.payment_method === method.value) ? ' (metodo pagado)' : ''}
                       </option>
                     ))}
+                    <option value="mixed">Devolucion mixta</option>
                     {selectedSale.payment_method && selectedSale.payment_method !== 'mixed' && !paymentMethods.some((method) => method.value === selectedSale.payment_method) && (
                       <option value={selectedSale.payment_method}>
                         {selectedSale.payment_method_name || selectedSale.payment_method} (metodo pagado)
@@ -361,6 +475,56 @@ export default function Returns() {
                     )}
                   </select>
                 </div>
+
+                {isMixedRefund && (
+                  <div className="refund-split-panel">
+                    <div className="refund-split-header">
+                      <strong>Reembolsos de esta devolucion</strong>
+                      <button type="button" className="btn-secondary btn-small" onClick={addRefundSplit}>
+                        <Plus size={14} />
+                        Agregar
+                      </button>
+                    </div>
+                    <div className="refund-split-list">
+                      {refundSplits.map((split) => (
+                        <div className="refund-split-row" key={split.id}>
+                          <select
+                            value={split.payment_method}
+                            onChange={(e) => updateRefundSplit(split.id, 'payment_method', e.target.value)}
+                          >
+                            {paymentMethods.map((method) => (
+                              <option key={method.value} value={method.value}>
+                                {method.name}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={split.amount}
+                            onChange={(e) => updateRefundSplit(split.id, 'amount', e.target.value)}
+                            placeholder="0.00"
+                          />
+                          <button type="button" className="remove-split-button" onClick={() => removeRefundSplit(split.id)} title="Quitar metodo">
+                            <X size={16} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className={`refund-split-balance ${remainingRefundAmount === 0 ? 'ok' : 'pending'}`}>
+                      <span>Total reembolso</span>
+                      <strong>
+                        S/ {refundSplits.reduce((sum, split) => sum + (Number(split.amount) || 0), 0).toFixed(2)}
+                      </strong>
+                      <span>
+                        {remainingRefundAmount === 0
+                          ? 'Cuadrado'
+                          : `${remainingRefundAmount > 0 ? 'Falta' : 'Sobra'} S/ ${Math.abs(remainingRefundAmount).toFixed(2)}`}
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 <div className="return-items-section">
                   <h3>Productos a Devolver</h3>
@@ -447,19 +611,14 @@ export default function Returns() {
                 </div>
 
                 <div className="return-total">
-                  <strong>Total a Reembolsar: $
-                    {returnItems.reduce((sum, item) => {
-                      const unitPrice = selectedSale.items?.find((si: any) => si.id === item.sale_item_id)?.unit_price || 0;
-                      return sum + (unitPrice * item.quantity);
-                    }, 0).toFixed(2)}
-                  </strong>
+                  <strong>Total a Reembolsar: S/ {returnTotal.toFixed(2)}</strong>
                 </div>
 
                 <div className="modal-actions">
                   <button type="button" className="btn-secondary" onClick={() => { setShowModal(false); setReturnItems([]); setSelectedSaleId(null); setSaleSearch(''); resetForm(); }}>
                     Cancelar
                   </button>
-                  <button type="submit" className="btn-primary" disabled={returnItems.filter(item => item.quantity > 0).length === 0}>
+                  <button type="submit" className="btn-primary" disabled={returnItems.filter(item => item.quantity > 0).length === 0 || (isMixedRefund && !isMixedRefundValid)}>
                     <RotateCcw size={20} />
                     Procesar Devolución
                   </button>

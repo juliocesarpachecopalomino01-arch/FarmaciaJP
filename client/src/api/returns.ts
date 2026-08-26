@@ -22,6 +22,17 @@ export interface Return {
   notes?: string;
   created_at: string;
   items?: ReturnItemDetail[];
+  refund_details?: ReturnRefundDetail[];
+  refund_detail?: string;
+}
+
+export interface ReturnRefundDetail {
+  id: number;
+  return_id: number;
+  payment_method: string;
+  payment_method_name?: string;
+  amount: number;
+  created_at?: string;
 }
 
 export interface ReturnItemDetail {
@@ -39,6 +50,10 @@ export interface CreateReturnRequest {
   sale_id: number;
   items: ReturnItem[];
   refund_payment_method?: string;
+  refund_details?: Array<{
+    payment_method: string;
+    amount: number;
+  }>;
   reason?: string;
   notes?: string;
   password?: string;

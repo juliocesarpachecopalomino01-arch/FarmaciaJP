@@ -156,6 +156,85 @@
   border-radius: 0.5rem;
 }
 
+.refund-split-panel {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.8rem 0 1.3rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(21, 94, 239, 0.16);
+  border-radius: 0.5rem;
+  background: rgba(240, 249, 255, 0.5);
+}
+
+.refund-split-header,
+.refund-split-balance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.refund-split-header strong {
+  font-size: 0.9rem;
+}
+
+.btn-small {
+  min-height: 30px;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.82rem;
+}
+
+.refund-split-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.refund-split-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(100px, 140px) 34px;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.refund-split-row select,
+.refund-split-row input {
+  min-width: 0;
+  height: 36px;
+  padding: 0.4rem 0.5rem;
+}
+
+.refund-split-row input {
+  text-align: right;
+}
+
+.remove-split-button {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0.5rem;
+  color: #fff;
+  background: linear-gradient(135deg, var(--warning), var(--danger));
+  cursor: pointer;
+}
+
+.refund-split-balance {
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(148, 163, 184, 0.45);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.refund-split-balance.ok {
+  color: var(--success-dark);
+}
+
+.refund-split-balance.pending {
+  color: var(--danger-dark);
+}
+
 .sale-selection {
   padding: 2rem 0;
 }
@@ -229,6 +308,10 @@
 }
 
 @media (max-width: 760px) {
+  .refund-split-row {
+    grid-template-columns: 1fr 1fr 34px;
+  }
+
   .return-sale-results button {
     grid-template-columns: 1fr;
     gap: 0.25rem;

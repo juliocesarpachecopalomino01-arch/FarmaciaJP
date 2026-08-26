@@ -311,6 +311,33 @@ async function runCriticalMigrations(): Promise<void> {
   `);
 
   await runDb(`
+    CREATE TABLE IF NOT EXISTS return_refund_details (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      return_id INTEGER NOT NULL,
+      payment_method TEXT NOT NULL,
+      amount REAL NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (return_id) REFERENCES returns(id),
+      FOREIGN KEY (payment_method) REFERENCES payment_methods(value)
+    )
+  `);
+
+  await runDb(`
+    INSERT INTO return_refund_details (return_id, payment_method, amount, created_at)
+    SELECT r.id,
+           COALESCE(cm.payment_method, r.refund_payment_method, 'cash'),
+           ABS(COALESCE(cm.amount, r.total_amount)),
+           r.created_at
+    FROM returns r
+    LEFT JOIN cash_movements cm ON cm.reference_type = 'return' AND cm.reference_id = r.id
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM return_refund_details rrd
+      WHERE rrd.return_id = r.id
+    )
+  `);
+
+  await runDb(`
     INSERT INTO sale_payment_details (sale_id, payment_method, amount, payment_reference, created_at)
     SELECT s.id, s.payment_method, s.final_amount, s.payment_reference, s.created_at
     FROM sales s
@@ -811,6 +838,19 @@ export function initializeDatabase(): Promise<void> {
           FOREIGN KEY (customer_id) REFERENCES customers(id),
           FOREIGN KEY (user_id) REFERENCES users(id),
           FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id)
+        )
+      `);
+
+      // Detailed refunds per return (supports mixed refunds)
+      db.run(`
+        CREATE TABLE IF NOT EXISTS return_refund_details (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          return_id INTEGER NOT NULL,
+          payment_method TEXT NOT NULL,
+          amount REAL NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (return_id) REFERENCES returns(id),
+          FOREIGN KEY (payment_method) REFERENCES payment_methods(value)
         )
       `);
 

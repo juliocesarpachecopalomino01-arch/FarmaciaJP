@@ -382,7 +382,13 @@ router.get('/returns/excel', authenticateToken, [
 
   let sql = `
       SELECT r.return_number, r.total_amount, r.reason, r.status, r.notes, r.created_at,
-             COALESCE(pm.name, r.refund_payment_method) as refund_payment_method,
+             CASE WHEN r.refund_payment_method = 'mixed' THEN 'Mixto' ELSE COALESCE(pm.name, r.refund_payment_method) END as refund_payment_method,
+             (
+               SELECT GROUP_CONCAT(COALESCE(pmd.name, rrd.payment_method) || ' S/ ' || printf('%.2f', rrd.amount), ' + ')
+               FROM return_refund_details rrd
+               LEFT JOIN payment_methods pmd ON pmd.value = rrd.payment_method
+               WHERE rrd.return_id = r.id
+             ) as refund_detail,
              s.sale_number, c.name as customer_name, u.full_name as user_name
      FROM returns r
      INNER JOIN sales s ON r.sale_id = s.id
@@ -423,6 +429,7 @@ router.get('/returns/excel', authenticateToken, [
         Usuario: returnItem.user_name || '',
         Monto: Number(returnItem.total_amount) || 0,
         'Metodo de reembolso': returnItem.refund_payment_method || '',
+        'Detalle de reembolso': returnItem.refund_detail || '',
         'Razón': returnItem.reason || '',
         Estado: returnItem.status || '',
         Fecha: returnItem.created_at ? new Date(returnItem.created_at).toLocaleString('es-ES') : '',

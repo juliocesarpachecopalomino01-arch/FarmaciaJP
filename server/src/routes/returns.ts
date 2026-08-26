@@ -26,6 +26,12 @@ interface CashRegisterError {
   message: string;
 }
 
+type RefundDetailInput = {
+  payment_method?: string;
+  method?: string;
+  amount: number;
+};
+
 function getOpenCashRegister(userId: number): Promise<{ id: number }> {
   return new Promise((resolve, reject) => {
     db.get(
@@ -89,6 +95,41 @@ function getFirstSalePaymentMethod(saleId: number): Promise<string | null> {
   });
 }
 
+async function buildRefundDetails(totalAmount: number, defaultPaymentMethod: string, refundDetails?: RefundDetailInput[]) {
+  const hasMixedDetails = Array.isArray(refundDetails) && refundDetails.length > 0;
+  const details = hasMixedDetails
+    ? refundDetails.map((detail) => ({
+        payment_method: String(detail.payment_method || detail.method || '').trim(),
+        amount: Number(detail.amount || 0),
+      }))
+    : [{
+        payment_method: defaultPaymentMethod,
+        amount: totalAmount,
+      }];
+
+  if (details.some((detail) => !detail.payment_method || !Number.isFinite(detail.amount) || detail.amount <= 0)) {
+    throw new Error('Cada reembolso debe tener metodo y monto mayor a cero.');
+  }
+
+  const roundedTotal = Math.round(totalAmount * 100);
+  const roundedRefunds = details.reduce((sum, detail) => sum + Math.round(detail.amount * 100), 0);
+  if (roundedRefunds !== roundedTotal) {
+    throw new Error('La suma de los reembolsos debe ser igual al total de la devolucion.');
+  }
+
+  for (const detail of details) {
+    const validPaymentMethod = await validatePaymentMethod(detail.payment_method);
+    if (!validPaymentMethod) {
+      throw new Error('El metodo de devolucion no existe o esta inactivo.');
+    }
+  }
+
+  return details.map((detail) => ({
+    ...detail,
+    amount: Math.round(detail.amount * 100) / 100,
+  }));
+}
+
 // Get all returns
 router.get('/', authenticateToken, [
   query('start_date').optional(),
@@ -109,7 +150,13 @@ router.get('/', authenticateToken, [
 
   let query = `
     SELECT r.*, s.sale_number, c.name as customer_name, u.username as user_name,
-           COALESCE(pm.name, r.refund_payment_method) as refund_payment_method_name
+           CASE WHEN r.refund_payment_method = 'mixed' THEN 'Mixto' ELSE COALESCE(pm.name, r.refund_payment_method) END as refund_payment_method_name,
+           (
+             SELECT GROUP_CONCAT(COALESCE(pmd.name, rrd.payment_method) || ' S/ ' || printf('%.2f', rrd.amount), ' + ')
+             FROM return_refund_details rrd
+             LEFT JOIN payment_methods pmd ON pmd.value = rrd.payment_method
+             WHERE rrd.return_id = r.id
+           ) as refund_detail
     FROM returns r
     INNER JOIN sales s ON r.sale_id = s.id
     LEFT JOIN customers c ON r.customer_id = c.id
@@ -155,7 +202,7 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res: Response) => {
 
   db.get(
     `SELECT r.*, s.sale_number, c.name as customer_name, u.username as user_name,
-            COALESCE(pm.name, r.refund_payment_method) as refund_payment_method_name
+            CASE WHEN r.refund_payment_method = 'mixed' THEN 'Mixto' ELSE COALESCE(pm.name, r.refund_payment_method) END as refund_payment_method_name
      FROM returns r
      INNER JOIN sales s ON r.sale_id = s.id
      LEFT JOIN customers c ON r.customer_id = c.id
@@ -186,7 +233,20 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res: Response) => {
           if (err) {
             return res.status(500).json({ error: 'Database error' });
           }
-          res.json({ ...returnData, items });
+          db.all(
+            `SELECT rrd.*, COALESCE(pm.name, rrd.payment_method) as payment_method_name
+             FROM return_refund_details rrd
+             LEFT JOIN payment_methods pm ON pm.value = rrd.payment_method
+             WHERE rrd.return_id = ?
+             ORDER BY rrd.id ASC`,
+            [id],
+            (refundErr, refundDetails) => {
+              if (refundErr) {
+                return res.status(500).json({ error: 'Database error' });
+              }
+              res.json({ ...returnData, items, refund_details: refundDetails || [] });
+            }
+          );
         }
       );
     }
@@ -200,6 +260,10 @@ router.post('/', authenticateToken, [
   body('items.*.sale_item_id').isInt().withMessage('Sale item ID is required'),
   body('items.*.quantity').isInt({ min: 1 }).withMessage('Valid quantity is required'),
   body('refund_payment_method').optional().isString().isLength({ max: 60 }),
+  body('refund_details').optional().isArray(),
+  body('refund_details.*.payment_method').optional().isString(),
+  body('refund_details.*.method').optional().isString(),
+  body('refund_details.*.amount').optional().isFloat({ gt: 0 }),
   body('password').optional().isString(),
 ], (req: AuthRequest, res: Response) => {
   const errors = validationResult(req);
@@ -213,6 +277,7 @@ router.post('/', authenticateToken, [
     reason,
     notes,
     refund_payment_method,
+    refund_details,
     password,
   } = req.body;
 
@@ -283,8 +348,7 @@ router.post('/', authenticateToken, [
               ? await getFirstSalePaymentMethod(sale.id)
               : null;
             const effectiveRefundPaymentMethod = String(refund_payment_method || firstSalePaymentMethod || sale.payment_method || 'cash').trim();
-            const validPaymentMethod = await validatePaymentMethod(effectiveRefundPaymentMethod);
-            if (!validPaymentMethod) {
+            if (effectiveRefundPaymentMethod !== 'mixed' && !(await validatePaymentMethod(effectiveRefundPaymentMethod))) {
               return res.status(400).json({ error: 'El metodo de devolucion no existe o esta inactivo.' });
             }
 
@@ -361,13 +425,15 @@ router.post('/', authenticateToken, [
             };
 
             validateItems()
-              .then(() => {
+              .then(async () => {
                 const createdAt = getLocalDateTime();
+                const finalRefundDetails = await buildRefundDetails(totalAmount, effectiveRefundPaymentMethod, refund_details);
+                const storedRefundPaymentMethod = finalRefundDetails.length > 1 ? 'mixed' : finalRefundDetails[0].payment_method;
                 // Create return
                 db.run(
                   `INSERT INTO returns (return_number, sale_id, customer_id, user_id, cash_register_id, refund_payment_method, total_amount, reason, notes, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [returnNumber, sale_id, sale.customer_id, req.user!.id, sale.cash_register_id, effectiveRefundPaymentMethod, totalAmount, reason || null, notes || null, createdAt],
+                  [returnNumber, sale_id, sale.customer_id, req.user!.id, sale.cash_register_id, storedRefundPaymentMethod, totalAmount, reason || null, notes || null, createdAt],
                   function(err) {
                     if (err) {
                       return res.status(500).json({ error: 'Database error' });
@@ -375,9 +441,34 @@ router.post('/', authenticateToken, [
 
                     const returnId = this.lastID;
 
+                    const insertRefundDetails = (done: (detailErr?: Error) => void) => {
+                      const stmt = db.prepare(
+                        `INSERT INTO return_refund_details (return_id, payment_method, amount, created_at)
+                         VALUES (?, ?, ?, ?)`
+                      );
+                      let hasError = false;
+                      finalRefundDetails.forEach((detail) => {
+                        stmt.run([returnId, detail.payment_method, detail.amount, createdAt], (detailErr) => {
+                          if (detailErr) hasError = true;
+                        });
+                      });
+                      stmt.finalize((finalizeErr) => {
+                        if (finalizeErr || hasError) {
+                          done(new Error('Error registrando el detalle del reembolso'));
+                          return;
+                        }
+                        done();
+                      });
+                    };
+
                     // Insert return items and restore inventory
                     let itemsProcessed = 0;
                     const errors: string[] = [];
+
+                    insertRefundDetails((detailErr) => {
+                      if (detailErr) {
+                        return res.status(500).json({ error: detailErr.message });
+                      }
 
                     returnItems.forEach((item) => {
                       db.run(
@@ -440,29 +531,46 @@ router.post('/', authenticateToken, [
                                   );
                                 }
 
-                                db.run(
-                                  `INSERT INTO cash_movements (cash_register_id, movement_type, amount, payment_method, reference_type, reference_id, description, user_id, created_at)
-                                   VALUES (?, 'return', ?, ?, 'return', ?, ?, ?, ?)`,
-                                  [
-                                    sale.cash_register_id,
-                                    -Math.abs(totalAmount),
-                                    effectiveRefundPaymentMethod,
-                                    returnId,
-                                    `Devolucion ${returnNumber} de venta ${sale.sale_number}`,
-                                    req.user!.id,
-                                    createdAt,
-                                  ],
-                                  (cashMovementErr) => {
-                                    if (cashMovementErr) {
-                                      return res.status(500).json({ error: 'Error registrando movimiento de caja de la devolucion' });
+                                const insertCashMovements = (done: (cashErr?: Error) => void) => {
+                                  const stmt = db.prepare(
+                                    `INSERT INTO cash_movements (cash_register_id, movement_type, amount, payment_method, reference_type, reference_id, description, user_id, created_at)
+                                     VALUES (?, 'return', ?, ?, 'return', ?, ?, ?, ?)`
+                                  );
+                                  let hasError = false;
+                                  finalRefundDetails.forEach((detail) => {
+                                    stmt.run([
+                                      sale.cash_register_id,
+                                      -Math.abs(detail.amount),
+                                      detail.payment_method,
+                                      returnId,
+                                      `Devolucion ${returnNumber} de venta ${sale.sale_number}`,
+                                      req.user!.id,
+                                      createdAt,
+                                    ], (cashMovementErr) => {
+                                      if (cashMovementErr) hasError = true;
+                                    });
+                                  });
+                                  stmt.finalize((finalizeErr) => {
+                                    if (finalizeErr || hasError) {
+                                      done(new Error('Error registrando movimiento de caja de la devolucion'));
+                                      return;
                                     }
+                                    done();
+                                  });
+                                };
+
+                                insertCashMovements((cashMovementErr) => {
+                                  if (cashMovementErr) {
+                                    return res.status(500).json({ error: cashMovementErr.message });
+                                  }
 
                                     // Log audit
                                     logAction(req.user!.id, 'CREATE', 'return', returnId, null, {
                                       return_number: returnNumber,
                                       sale_id: sale_id,
                                       total_amount: totalAmount,
-                                      refund_payment_method: effectiveRefundPaymentMethod,
+                                      refund_payment_method: storedRefundPaymentMethod,
+                                      refund_details: finalRefundDetails,
                                       cash_movement_amount: -Math.abs(totalAmount),
                                     }, req);
 
@@ -471,13 +579,13 @@ router.post('/', authenticateToken, [
                                       return_number: returnNumber,
                                       message: 'Return processed successfully',
                                     });
-                                  }
-                                );
+                                });
                               }
                             );
                           }
                         }
                       );
+                    });
                     });
                   }
                 );
