@@ -108,11 +108,11 @@ router.get('/', authenticateToken, [
       u.username,
       u.full_name,
       COALESCE(agg.total_sales, 0) as total_sales,
-      COALESCE(agg.total_amount, 0) as total_amount,
+      (COALESCE(agg.total_amount, 0) + COALESCE(cmagg.total_movements_amount, 0)) as total_amount,
       COALESCE(agg.cash_amount, 0) as cash_amount,
-      COALESCE(agg.yape_amount, 0) as yape_amount,
-      COALESCE(agg.visa_amount, 0) as visa_amount,
-      COALESCE(agg.digital_amount, 0) as digital_amount,
+      (COALESCE(agg.yape_amount, 0) + COALESCE(cmagg.yape_movements_amount, 0)) as yape_amount,
+      (COALESCE(agg.visa_amount, 0) + COALESCE(cmagg.visa_movements_amount, 0)) as visa_amount,
+      (COALESCE(agg.digital_amount, 0) + COALESCE(cmagg.digital_movements_amount, 0)) as digital_amount,
       COALESCE(cmagg.cash_movements_amount, 0) as cash_movements_amount,
       (COALESCE(agg.cash_amount, 0) + COALESCE(cmagg.cash_movements_amount, 0)) as expected_cash_amount
     FROM cash_registers cr
@@ -133,10 +133,15 @@ router.get('/', authenticateToken, [
     ) agg ON cr.id = agg.cash_register_id
     LEFT JOIN (
       SELECT
-        cash_register_id,
-        COALESCE(SUM(amount), 0) as cash_movements_amount
-      FROM cash_movements
-      GROUP BY cash_register_id
+        cm.cash_register_id,
+        COALESCE(SUM(cm.amount), 0) as total_movements_amount,
+        COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN cm.payment_method = 'cash' THEN 1 ELSE 0 END) = 1 THEN cm.amount ELSE 0 END), 0) as cash_movements_amount,
+        COALESCE(SUM(CASE WHEN LOWER(COALESCE(pm.value, cm.payment_method, '')) LIKE '%yape%' OR LOWER(COALESCE(pm.name, '')) LIKE '%yape%' THEN cm.amount ELSE 0 END), 0) as yape_movements_amount,
+        COALESCE(SUM(CASE WHEN LOWER(COALESCE(pm.value, cm.payment_method, '')) LIKE '%visa%' OR LOWER(COALESCE(pm.name, '')) LIKE '%visa%' OR LOWER(COALESCE(pm.value, cm.payment_method, '')) = 'card' OR LOWER(COALESCE(pm.name, '')) LIKE '%tarjeta%' THEN cm.amount ELSE 0 END), 0) as visa_movements_amount,
+        COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN cm.payment_method = 'cash' THEN 1 ELSE 0 END) = 0 THEN cm.amount ELSE 0 END), 0) as digital_movements_amount
+      FROM cash_movements cm
+      LEFT JOIN payment_methods pm ON pm.value = cm.payment_method
+      GROUP BY cm.cash_register_id
     ) cmagg ON cr.id = cmagg.cash_register_id
     WHERE 1=1
   `;
@@ -309,9 +314,10 @@ router.post('/close', authenticateToken, [
           const totalAmount = rows.reduce((sum, r) => sum + (r.total || 0), 0);
 
           db.get(
-            `SELECT COALESCE(SUM(amount), 0) as cash_movements_amount
-             FROM cash_movements
-             WHERE cash_register_id = ?`,
+            `SELECT COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN cm.payment_method = 'cash' THEN 1 ELSE 0 END) = 1 THEN cm.amount ELSE 0 END), 0) as cash_movements_amount
+             FROM cash_movements cm
+             LEFT JOIN payment_methods pm ON pm.value = cm.payment_method
+             WHERE cm.cash_register_id = ?`,
             [session.id],
             (movErr, movementRow: any) => {
               if (movErr) {

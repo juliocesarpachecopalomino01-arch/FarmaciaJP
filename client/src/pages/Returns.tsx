@@ -5,6 +5,7 @@ import { useAuth } from '../hooks/useAuth';
 import { returnsApi, CreateReturnRequest } from '../api/returns';
 import { salesApi } from '../api/sales';
 import { companySettingsApi } from '../api/companySettings';
+import { paymentMethodsApi } from '../api/paymentMethods';
 import { Download, Filter, Plus, RotateCcw, Search } from 'lucide-react';
 import { format } from 'date-fns';
 import './Returns.css';
@@ -36,6 +37,7 @@ export default function Returns() {
   const [saleSearch, setSaleSearch] = useState('');
   const [returnItems, setReturnItems] = useState<Array<{ sale_item_id: number; product_name: string; max_quantity: number; quantity: number }>>([]);
   const [returnForm, setReturnForm] = useState({
+    refund_payment_method: '',
     reason: '',
     notes: '',
     password: '',
@@ -66,6 +68,7 @@ export default function Returns() {
 
   const { data: returnsData } = useQuery(['returns', effectiveFilters], () => returnsApi.getAll(effectiveFilters));
   const { data: salesData } = useQuery('sales-available-return', () => salesApi.getAvailableForReturn());
+  const { data: paymentMethodsData } = useQuery('payment-methods-active', () => paymentMethodsApi.getAll({ active: 1 }));
   const { data: selectedSale } = useQuery(
     ['sale', selectedSaleId],
     () => selectedSaleId ? salesApi.getById(selectedSaleId) : null,
@@ -97,6 +100,7 @@ export default function Returns() {
 
   const resetForm = () => {
     setReturnForm({
+      refund_payment_method: '',
       reason: '',
       notes: '',
       password: '',
@@ -110,6 +114,10 @@ export default function Returns() {
     
     // Load sale items with available quantities
     salesApi.getById(saleId).then((sale) => {
+      setReturnForm((prev) => ({
+        ...prev,
+        refund_payment_method: sale.payment_method || 'cash',
+      }));
       if (sale.items) {
         setReturnItems(sale.items.map((item: any) => {
           const availableQuantity = item.available_quantity !== undefined 
@@ -150,6 +158,7 @@ export default function Returns() {
         sale_item_id: item.sale_item_id,
         quantity: item.quantity,
       })),
+      refund_payment_method: returnForm.refund_payment_method || selectedSale?.payment_method || 'cash',
       reason: returnForm.reason || undefined,
       notes: returnForm.notes || undefined,
       password: returnForm.password || undefined,
@@ -170,6 +179,7 @@ export default function Returns() {
 
   const returns = returnsData || [];
   const availableSales = salesData?.sales || [];
+  const paymentMethods = paymentMethodsData || [];
   const filteredAvailableSales = useMemo(() => {
     const needle = saleSearch.trim().toLowerCase();
     if (!needle) return availableSales;
@@ -253,6 +263,7 @@ export default function Returns() {
               <th>Venta Original</th>
               <th>Cliente</th>
               <th>Monto</th>
+              <th>Metodo Reembolso</th>
               <th>Razón</th>
               <th>Fecha</th>
             </tr>
@@ -264,6 +275,7 @@ export default function Returns() {
                 <td>{returnItem.sale_number}</td>
                 <td>{returnItem.customer_name || 'Cliente General'}</td>
                 <td>${returnItem.total_amount.toFixed(2)}</td>
+                <td>{returnItem.refund_payment_method_name || returnItem.refund_payment_method || '-'}</td>
                 <td>{returnItem.reason || '-'}</td>
                 <td>{format(new Date(returnItem.created_at), 'dd/MM/yyyy HH:mm')}</td>
               </tr>
@@ -314,6 +326,31 @@ export default function Returns() {
                   <h3>Venta: {selectedSale.sale_number}</h3>
                   <p>Cliente: {selectedSale.customer_name || 'Cliente General'}</p>
                   <p>Fecha: {format(new Date(selectedSale.created_at), 'dd/MM/yyyy HH:mm')}</p>
+                  <p>Metodo pagado: {selectedSale.payment_method_name || selectedSale.payment_method}</p>
+                </div>
+
+                <div className="form-group">
+                  <label>Metodo de Devolucion del Dinero</label>
+                  <select
+                    value={returnForm.refund_payment_method || selectedSale.payment_method || 'cash'}
+                    onChange={(e) => setReturnForm({ ...returnForm, refund_payment_method: e.target.value })}
+                  >
+                    {paymentMethods.map((method) => (
+                      <option key={method.value} value={method.value}>
+                        {method.name}{method.value === selectedSale.payment_method ? ' (metodo pagado)' : ''}
+                      </option>
+                    ))}
+                    {selectedSale.payment_method && !paymentMethods.some((method) => method.value === selectedSale.payment_method) && (
+                      <option value={selectedSale.payment_method}>
+                        {selectedSale.payment_method_name || selectedSale.payment_method} (metodo pagado)
+                      </option>
+                    )}
+                    {paymentMethods.length === 0 && (
+                      <option value={selectedSale.payment_method || 'cash'}>
+                        {selectedSale.payment_method_name || selectedSale.payment_method || 'Efectivo'}
+                      </option>
+                    )}
+                  </select>
                 </div>
 
                 <div className="return-items-section">

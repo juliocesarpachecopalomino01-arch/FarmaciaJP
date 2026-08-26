@@ -273,18 +273,20 @@ export default function CashRegisterPage() {
     if (!currentCashRegister) return 0;
 
     const cashMethodValues = new Set(paymentMethods.filter((method) => method.is_cash === 1).map((method) => method.value));
+    const isCashMethod = (methodValue?: string | null) => (
+      cashMethodValues.size > 0 ? cashMethodValues.has(methodValue || '') : methodValue === 'cash'
+    );
     const cashSales = (currentCashSales?.sales || []).filter((s: Sale) => {
-      const isCash = cashMethodValues.size > 0 ? cashMethodValues.has(s.payment_method) : s.payment_method === 'cash';
-      return isCash && s.status !== 'cancelled';
+      return isCashMethod(s.payment_method) && s.status !== 'cancelled';
     });
 
     const totalCashSales = cashSales.reduce((sum: number, s: Sale) => sum + (s.final_amount || 0), 0);
-    const cashMovementsTotal = currentCashMovements.reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
+    const cashMovementsTotal = currentCashMovements
+      .filter((movement) => isCashMethod(movement.payment_method))
+      .reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
 
     return currentCashRegister.opening_balance + totalCashSales + cashMovementsTotal;
   };
-
-  const cashMovementsTotal = currentCashMovements.reduce((sum, movement) => sum + Number(movement.amount || 0), 0);
 
   const expectedBalance = calculateExpectedBalance();
   const minCashAccountingDate = getLocalDateInputValueOffset(-historyDays);
@@ -908,8 +910,7 @@ export default function CashRegisterPage() {
                   </span>
                 </div>
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                  Saldo inicial (S/ {currentCashRegister.opening_balance.toFixed(2)}) + ventas en efectivo + movimientos de caja
-                  {cashMovementsTotal !== 0 ? ` (S/ ${cashMovementsTotal.toFixed(2)})` : ''}
+                  Saldo inicial + ventas en efectivo - devoluciones o salidas registradas en efectivo.
                 </p>
 
                 <div className="cash-count-box">

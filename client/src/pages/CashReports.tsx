@@ -220,9 +220,9 @@ export default function CashReports() {
           <small>segun filtros</small>
         </div>
         <div className="cash-summary-card">
-          <span>Total vendido</span>
+          <span>Total neto</span>
           <strong>{formatCurrency(summary.totalSold)}</strong>
-          <small>ventas registradas</small>
+          <small>ventas menos devoluciones</small>
         </div>
         <div className="cash-summary-card">
           <span>Yape</span>
@@ -278,7 +278,7 @@ export default function CashReports() {
               <th>Visa/Tarjeta Calculado</th>
               <th>Efectivo Calculado</th>
               <th>Efectivo Entregado</th>
-              <th>Total Vendido</th>
+              <th>Total Neto</th>
               <th>Diferencia</th>
               <th>Resultado</th>
             </tr>

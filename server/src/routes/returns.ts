@@ -59,6 +59,19 @@ function getPeruDateStringOffset(daysOffset: number) {
   return getLocalDate(daysOffset);
 }
 
+function validatePaymentMethod(value: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    db.get(
+      'SELECT value FROM payment_methods WHERE value = ? AND is_active = 1',
+      [value],
+      (err, row) => {
+        if (err) return resolve(false);
+        resolve(!!row);
+      }
+    );
+  });
+}
+
 // Get all returns
 router.get('/', authenticateToken, [
   query('start_date').optional(),
@@ -78,11 +91,13 @@ router.get('/', authenticateToken, [
     : (end_date && String(end_date) < maxVisibleDate ? String(end_date) : maxVisibleDate);
 
   let query = `
-    SELECT r.*, s.sale_number, c.name as customer_name, u.username as user_name
+    SELECT r.*, s.sale_number, c.name as customer_name, u.username as user_name,
+           COALESCE(pm.name, r.refund_payment_method) as refund_payment_method_name
     FROM returns r
     INNER JOIN sales s ON r.sale_id = s.id
     LEFT JOIN customers c ON r.customer_id = c.id
     INNER JOIN users u ON r.user_id = u.id
+    LEFT JOIN payment_methods pm ON pm.value = r.refund_payment_method
     WHERE 1=1
   `;
   const params: any[] = [];
@@ -122,11 +137,13 @@ router.get('/:id', authenticateToken, (req: AuthRequest, res: Response) => {
   const { id } = req.params;
 
   db.get(
-    `SELECT r.*, s.sale_number, c.name as customer_name, u.username as user_name
+    `SELECT r.*, s.sale_number, c.name as customer_name, u.username as user_name,
+            COALESCE(pm.name, r.refund_payment_method) as refund_payment_method_name
      FROM returns r
      INNER JOIN sales s ON r.sale_id = s.id
      LEFT JOIN customers c ON r.customer_id = c.id
      INNER JOIN users u ON r.user_id = u.id
+     LEFT JOIN payment_methods pm ON pm.value = r.refund_payment_method
      WHERE r.id = ?`,
     [id],
     (err, returnData: any) => {
@@ -165,6 +182,7 @@ router.post('/', authenticateToken, [
   body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
   body('items.*.sale_item_id').isInt().withMessage('Sale item ID is required'),
   body('items.*.quantity').isInt({ min: 1 }).withMessage('Valid quantity is required'),
+  body('refund_payment_method').optional().isString().isLength({ max: 60 }),
   body('password').optional().isString(),
 ], (req: AuthRequest, res: Response) => {
   const errors = validationResult(req);
@@ -177,6 +195,7 @@ router.post('/', authenticateToken, [
     items,
     reason,
     notes,
+    refund_payment_method,
     password,
   } = req.body;
 
@@ -238,12 +257,18 @@ router.post('/', authenticateToken, [
               requires_password: true,
             });
           }
-          getCompanyPassword('return_password', DEVOLUTION_PASSWORD).then((configuredPassword) => {
+          getCompanyPassword('return_password', DEVOLUTION_PASSWORD).then(async (configuredPassword) => {
             if (password !== configuredPassword) {
               return res.status(403).json({ error: 'ContraseÃ±a incorrecta.' });
             }
 
-            proceedWithReturn();
+            const effectiveRefundPaymentMethod = String(refund_payment_method || sale.payment_method || 'cash').trim();
+            const validPaymentMethod = await validatePaymentMethod(effectiveRefundPaymentMethod);
+            if (!validPaymentMethod && effectiveRefundPaymentMethod !== sale.payment_method) {
+              return res.status(400).json({ error: 'El metodo de devolucion no existe o esta inactivo.' });
+            }
+
+            proceedWithReturn(effectiveRefundPaymentMethod);
           });
         })
         .catch((e: CashRegisterError) => {
@@ -253,7 +278,7 @@ router.post('/', authenticateToken, [
           return res.status(500).json({ error: 'Database error' });
         });
 
-      function proceedWithReturn() {
+      function proceedWithReturn(effectiveRefundPaymentMethod: string) {
             // Validate items and calculate total
             let totalAmount = 0;
             const returnItems: any[] = [];
@@ -320,9 +345,9 @@ router.post('/', authenticateToken, [
                 const createdAt = getLocalDateTime();
                 // Create return
                 db.run(
-                  `INSERT INTO returns (return_number, sale_id, customer_id, user_id, cash_register_id, total_amount, reason, notes, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [returnNumber, sale_id, sale.customer_id, req.user!.id, sale.cash_register_id, totalAmount, reason || null, notes || null, createdAt],
+                  `INSERT INTO returns (return_number, sale_id, customer_id, user_id, cash_register_id, refund_payment_method, total_amount, reason, notes, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [returnNumber, sale_id, sale.customer_id, req.user!.id, sale.cash_register_id, effectiveRefundPaymentMethod, totalAmount, reason || null, notes || null, createdAt],
                   function(err) {
                     if (err) {
                       return res.status(500).json({ error: 'Database error' });
@@ -401,7 +426,7 @@ router.post('/', authenticateToken, [
                                   [
                                     sale.cash_register_id,
                                     -Math.abs(totalAmount),
-                                    sale.payment_method || null,
+                                    effectiveRefundPaymentMethod,
                                     returnId,
                                     `Devolucion ${returnNumber} de venta ${sale.sale_number}`,
                                     req.user!.id,
@@ -417,6 +442,7 @@ router.post('/', authenticateToken, [
                                       return_number: returnNumber,
                                       sale_id: sale_id,
                                       total_amount: totalAmount,
+                                      refund_payment_method: effectiveRefundPaymentMethod,
                                       cash_movement_amount: -Math.abs(totalAmount),
                                     }, req);
 

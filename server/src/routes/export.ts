@@ -365,12 +365,14 @@ router.get('/returns/excel', authenticateToken, [
   const params: any[] = [];
 
   let sql = `
-    SELECT r.return_number, r.total_amount, r.reason, r.status, r.notes, r.created_at,
-           s.sale_number, c.name as customer_name, u.full_name as user_name
-    FROM returns r
-    INNER JOIN sales s ON r.sale_id = s.id
-    LEFT JOIN customers c ON r.customer_id = c.id
-    INNER JOIN users u ON r.user_id = u.id
+      SELECT r.return_number, r.total_amount, r.reason, r.status, r.notes, r.created_at,
+             COALESCE(pm.name, r.refund_payment_method) as refund_payment_method,
+             s.sale_number, c.name as customer_name, u.full_name as user_name
+     FROM returns r
+     INNER JOIN sales s ON r.sale_id = s.id
+     LEFT JOIN customers c ON r.customer_id = c.id
+     INNER JOIN users u ON r.user_id = u.id
+     LEFT JOIN payment_methods pm ON pm.value = r.refund_payment_method
     WHERE 1=1
   `;
 
@@ -404,6 +406,7 @@ router.get('/returns/excel', authenticateToken, [
         Cliente: returnItem.customer_name || 'Cliente General',
         Usuario: returnItem.user_name || '',
         Monto: Number(returnItem.total_amount) || 0,
+        'Metodo de reembolso': returnItem.refund_payment_method || '',
         'Razón': returnItem.reason || '',
         Estado: returnItem.status || '',
         Fecha: returnItem.created_at ? new Date(returnItem.created_at).toLocaleString('es-ES') : '',

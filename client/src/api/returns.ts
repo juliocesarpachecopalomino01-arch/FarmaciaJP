@@ -15,6 +15,8 @@ export interface Return {
   user_id: number;
   user_name?: string;
   total_amount: number;
+  refund_payment_method?: string;
+  refund_payment_method_name?: string;
   reason?: string;
   status: string;
   notes?: string;
@@ -36,6 +38,7 @@ export interface ReturnItemDetail {
 export interface CreateReturnRequest {
   sale_id: number;
   items: ReturnItem[];
+  refund_payment_method?: string;
   reason?: string;
   notes?: string;
   password?: string;

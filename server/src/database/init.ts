@@ -271,8 +271,31 @@ async function runCriticalMigrations(): Promise<void> {
   ]);
 
   await ensureColumns('returns', [
-    ['cash_register_id', 'INTEGER']
+    ['cash_register_id', 'INTEGER'],
+    ['refund_payment_method', "TEXT DEFAULT 'cash'"]
   ]);
+
+  await runDb(`
+    UPDATE returns
+    SET refund_payment_method = COALESCE(
+      (
+        SELECT cm.payment_method
+        FROM cash_movements cm
+        WHERE cm.reference_type = 'return'
+          AND cm.reference_id = returns.id
+          AND cm.payment_method IS NOT NULL
+        ORDER BY cm.id DESC
+        LIMIT 1
+      ),
+      (
+        SELECT s.payment_method
+        FROM sales s
+        WHERE s.id = returns.sale_id
+      ),
+      'cash'
+    )
+    WHERE refund_payment_method IS NULL OR refund_payment_method = '' OR refund_payment_method = 'cash'
+  `);
 
   await runDb(`
     CREATE TABLE IF NOT EXISTS cash_accounts (
@@ -740,6 +763,7 @@ export function initializeDatabase(): Promise<void> {
           customer_id INTEGER,
           user_id INTEGER NOT NULL,
           cash_register_id INTEGER,
+          refund_payment_method TEXT DEFAULT 'cash',
           total_amount REAL NOT NULL,
           reason TEXT,
           status TEXT DEFAULT 'completed',
@@ -1134,13 +1158,23 @@ export function initializeDatabase(): Promise<void> {
         if (err) {
           console.error('Error checking returns table structure:', err);
         } else {
-          const hasCashRegisterId = (columns || []).some((col) => col.name === 'cash_register_id');
+          const colNames = (columns || []).map((col) => col.name);
+          const hasCashRegisterId = colNames.includes('cash_register_id');
           if (!hasCashRegisterId) {
             db.run('ALTER TABLE returns ADD COLUMN cash_register_id INTEGER', (alterErr) => {
               if (alterErr) {
                 console.error('Error adding cash_register_id column to returns table:', alterErr);
               } else {
                 console.log('Column cash_register_id added to returns table');
+              }
+            });
+          }
+          if (!colNames.includes('refund_payment_method')) {
+            db.run("ALTER TABLE returns ADD COLUMN refund_payment_method TEXT DEFAULT 'cash'", (alterErr) => {
+              if (alterErr) {
+                console.error('Error adding refund_payment_method column to returns table:', alterErr);
+              } else {
+                console.log('Column refund_payment_method added to returns table');
               }
             });
           }
