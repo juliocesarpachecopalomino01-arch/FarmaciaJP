@@ -884,6 +884,79 @@
   color: var(--danger-dark);
 }
 
+.payment-split-panel {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(21, 94, 239, 0.16);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, #f8fbff 0%, #effdf5 100%);
+}
+
+.payment-split-header,
+.payment-split-balance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.payment-split-header strong {
+  font-size: 0.85rem;
+}
+
+.btn-small {
+  min-height: 30px;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.payment-split-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.payment-split-row {
+  display: grid;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.payment-split-row.with-reference {
+  grid-template-columns: minmax(120px, 1fr) 90px minmax(0, 1fr) 34px;
+}
+
+.payment-split-row.without-reference {
+  grid-template-columns: minmax(120px, 1fr) 90px 34px;
+}
+
+.payment-split-row select,
+.payment-split-row input {
+  min-width: 0;
+  height: 34px;
+  padding: 0.35rem 0.45rem;
+}
+
+.payment-split-row input:nth-of-type(1) {
+  text-align: right;
+}
+
+.payment-split-balance {
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(148, 163, 184, 0.45);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.payment-split-balance.ok {
+  color: var(--success-dark);
+}
+
+.payment-split-balance.pending {
+  color: var(--danger-dark);
+}
+
 .expected-balance-row {
   display: flex;
   justify-content: space-between;

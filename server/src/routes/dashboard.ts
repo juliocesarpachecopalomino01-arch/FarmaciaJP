@@ -23,7 +23,7 @@ router.get('/stats', authenticateToken, [
 
   // Get sales for the day
   db.all(
-    `SELECT s.*, COALESCE(pm.name, s.payment_method) as payment_method_name, c.name as customer_name, u.username as user_name
+      `SELECT s.*, CASE WHEN s.payment_method = 'mixed' THEN 'Mixto' ELSE COALESCE(pm.name, s.payment_method) END as payment_method_name, c.name as customer_name, u.username as user_name
      FROM sales s
      LEFT JOIN customers c ON s.customer_id = c.id
      LEFT JOIN payment_methods pm ON pm.value = s.payment_method

@@ -298,6 +298,30 @@ async function runCriticalMigrations(): Promise<void> {
   `);
 
   await runDb(`
+    CREATE TABLE IF NOT EXISTS sale_payment_details (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sale_id INTEGER NOT NULL,
+      payment_method TEXT NOT NULL,
+      amount REAL NOT NULL,
+      payment_reference TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (sale_id) REFERENCES sales(id),
+      FOREIGN KEY (payment_method) REFERENCES payment_methods(value)
+    )
+  `);
+
+  await runDb(`
+    INSERT INTO sale_payment_details (sale_id, payment_method, amount, payment_reference, created_at)
+    SELECT s.id, s.payment_method, s.final_amount, s.payment_reference, s.created_at
+    FROM sales s
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM sale_payment_details spd
+      WHERE spd.sale_id = s.id
+    )
+  `);
+
+  await runDb(`
     CREATE TABLE IF NOT EXISTS cash_accounts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
@@ -751,6 +775,20 @@ export function initializeDatabase(): Promise<void> {
           FOREIGN KEY (sale_id) REFERENCES sales(id),
           FOREIGN KEY (product_id) REFERENCES products(id),
           FOREIGN KEY (presentation_id) REFERENCES product_presentations(id)
+        )
+      `);
+
+      // Detailed payments per sale (supports mixed payments)
+      db.run(`
+        CREATE TABLE IF NOT EXISTS sale_payment_details (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sale_id INTEGER NOT NULL,
+          payment_method TEXT NOT NULL,
+          amount REAL NOT NULL,
+          payment_reference TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (sale_id) REFERENCES sales(id),
+          FOREIGN KEY (payment_method) REFERENCES payment_methods(value)
         )
       `);
 

@@ -114,9 +114,12 @@ export default function Returns() {
     
     // Load sale items with available quantities
     salesApi.getById(saleId).then((sale) => {
+      const defaultRefundMethod = sale.payment_method === 'mixed'
+        ? sale.payment_details?.[0]?.payment_method || 'cash'
+        : sale.payment_method || 'cash';
       setReturnForm((prev) => ({
         ...prev,
-        refund_payment_method: sale.payment_method || 'cash',
+        refund_payment_method: defaultRefundMethod,
       }));
       if (sale.items) {
         setReturnItems(sale.items.map((item: any) => {
@@ -158,7 +161,7 @@ export default function Returns() {
         sale_item_id: item.sale_item_id,
         quantity: item.quantity,
       })),
-      refund_payment_method: returnForm.refund_payment_method || selectedSale?.payment_method || 'cash',
+      refund_payment_method: returnForm.refund_payment_method || selectedSale?.payment_details?.[0]?.payment_method || selectedSale?.payment_method || 'cash',
       reason: returnForm.reason || undefined,
       notes: returnForm.notes || undefined,
       password: returnForm.password || undefined,
@@ -326,7 +329,13 @@ export default function Returns() {
                   <h3>Venta: {selectedSale.sale_number}</h3>
                   <p>Cliente: {selectedSale.customer_name || 'Cliente General'}</p>
                   <p>Fecha: {format(new Date(selectedSale.created_at), 'dd/MM/yyyy HH:mm')}</p>
-                  <p>Metodo pagado: {selectedSale.payment_method_name || selectedSale.payment_method}</p>
+                  <p>
+                    Metodo pagado: {selectedSale.payment_method === 'mixed'
+                      ? (selectedSale.payment_details || [])
+                          .map((payment) => `${payment.payment_method_name || payment.payment_method} S/ ${Number(payment.amount || 0).toFixed(2)}`)
+                          .join(' + ') || 'Mixto'
+                      : selectedSale.payment_method_name || selectedSale.payment_method}
+                  </p>
                 </div>
 
                 <div className="form-group">
@@ -337,10 +346,10 @@ export default function Returns() {
                   >
                     {paymentMethods.map((method) => (
                       <option key={method.value} value={method.value}>
-                        {method.name}{method.value === selectedSale.payment_method ? ' (metodo pagado)' : ''}
+                        {method.name}{method.value === selectedSale.payment_method || selectedSale.payment_details?.some((payment) => payment.payment_method === method.value) ? ' (metodo pagado)' : ''}
                       </option>
                     ))}
-                    {selectedSale.payment_method && !paymentMethods.some((method) => method.value === selectedSale.payment_method) && (
+                    {selectedSale.payment_method && selectedSale.payment_method !== 'mixed' && !paymentMethods.some((method) => method.value === selectedSale.payment_method) && (
                       <option value={selectedSale.payment_method}>
                         {selectedSale.payment_method_name || selectedSale.payment_method} (metodo pagado)
                       </option>

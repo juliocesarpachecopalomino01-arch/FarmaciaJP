@@ -55,7 +55,15 @@ router.get('/sales/excel', authenticateToken, [
   let query = `
     SELECT s.sale_number, COALESCE(cr.accounting_date, DATE(s.created_at)) as accounting_date, s.created_at, c.name as customer_name,
            s.total_amount, s.discount, s.tax_amount, s.final_amount,
-           COALESCE(pm.name, s.payment_method) as payment_method, s.payment_reference, u.full_name as user_name
+           CASE WHEN s.payment_method = 'mixed' THEN 'Mixto' ELSE COALESCE(pm.name, s.payment_method) END as payment_method,
+           s.payment_reference,
+           (
+             SELECT GROUP_CONCAT(COALESCE(pmd.name, spd.payment_method) || ' S/ ' || printf('%.2f', spd.amount), ' + ')
+             FROM sale_payment_details spd
+             LEFT JOIN payment_methods pmd ON pmd.value = spd.payment_method
+             WHERE spd.sale_id = s.id
+           ) as payment_detail,
+           u.full_name as user_name
     FROM sales s
     LEFT JOIN cash_registers cr ON cr.id = s.cash_register_id
     LEFT JOIN customers c ON s.customer_id = c.id
@@ -98,6 +106,7 @@ router.get('/sales/excel', authenticateToken, [
       'Impuesto': sale.tax_amount,
       'Total': sale.final_amount,
       'MÃ©todo de Pago': sale.payment_method,
+      'Detalle de Pago': sale.payment_detail || '',
       'Referencia de Pago': sale.payment_reference || '',
       'Vendedor': sale.user_name,
     }));
@@ -145,7 +154,7 @@ router.get('/cash-movements/excel', authenticateToken, [
            s.created_at,
            COALESCE(c.name, 'Cliente General') as customer_name,
            s.final_amount,
-           COALESCE(pm.name, s.payment_method) as payment_method,
+           CASE WHEN s.payment_method = 'mixed' THEN 'Mixto' ELSE COALESCE(pm.name, s.payment_method) END as payment_method,
            s.payment_reference,
            s.status,
            u.full_name as user_name
@@ -167,8 +176,15 @@ router.get('/cash-movements/excel', authenticateToken, [
     salesParams.push(effectiveEndDate);
   }
   if (payment_method) {
-    salesSql += ' AND s.payment_method = ?';
-    salesParams.push(payment_method);
+    salesSql += ` AND (
+      s.payment_method = ?
+      OR EXISTS (
+        SELECT 1
+        FROM sale_payment_details spd
+        WHERE spd.sale_id = s.id AND spd.payment_method = ?
+      )
+    )`;
+    salesParams.push(payment_method, payment_method);
   }
   if (status) {
     salesSql += ' AND s.status = ?';

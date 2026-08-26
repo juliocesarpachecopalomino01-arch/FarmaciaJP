@@ -14,15 +14,24 @@ interface CashRegisterError {
 
 type PaymentMethodConfig = {
   id: number;
+  value: string;
+  name: string;
   requires_reference: number;
   reference_required: number;
   reference_label?: string;
 };
 
+type SalePaymentDetailInput = {
+  method?: string;
+  payment_method?: string;
+  amount: number;
+  payment_reference?: string;
+};
+
 function validatePaymentMethod(paymentMethod: string, paymentReference?: string): Promise<PaymentMethodConfig> {
   return new Promise((resolve, reject) => {
     db.get(
-      'SELECT id, requires_reference, reference_required, reference_label FROM payment_methods WHERE value = ? AND is_active = 1',
+      'SELECT id, value, name, requires_reference, reference_required, reference_label FROM payment_methods WHERE value = ? AND is_active = 1',
       [paymentMethod],
       (err, row: PaymentMethodConfig | undefined) => {
         if (err) return reject(new Error('Database error'));
@@ -34,6 +43,48 @@ function validatePaymentMethod(paymentMethod: string, paymentReference?: string)
       }
     );
   });
+}
+
+async function buildPaymentDetails(
+  finalAmount: number,
+  paymentMethod: string,
+  paymentReference?: string,
+  paymentDetails?: SalePaymentDetailInput[]
+) {
+  const hasMixedDetails = Array.isArray(paymentDetails) && paymentDetails.length > 0;
+  const details = hasMixedDetails
+    ? paymentDetails.map((detail) => ({
+        payment_method: String(detail.payment_method || detail.method || '').trim(),
+        amount: Number(detail.amount || 0),
+        payment_reference: detail.payment_reference?.trim() || undefined,
+      }))
+    : [{
+        payment_method: paymentMethod,
+        amount: finalAmount,
+        payment_reference: paymentReference?.trim() || undefined,
+      }];
+
+  if (details.some((detail) => !detail.payment_method || !Number.isFinite(detail.amount) || detail.amount <= 0)) {
+    throw new Error('Cada pago debe tener metodo y monto mayor a cero.');
+  }
+
+  const roundedFinalAmount = Math.round(finalAmount * 100);
+  const roundedPaidAmount = details.reduce((sum, detail) => sum + Math.round(detail.amount * 100), 0);
+  if (roundedPaidAmount !== roundedFinalAmount) {
+    throw new Error('La suma de los pagos debe ser igual al total de la venta.');
+  }
+
+  const validated = [];
+  for (const detail of details) {
+    const method = await validatePaymentMethod(detail.payment_method, detail.payment_reference);
+    validated.push({
+      ...detail,
+      amount: Math.round(detail.amount * 100) / 100,
+      payment_method_name: method.name,
+    });
+  }
+
+  return validated;
 }
 
 function getOpenCashRegister(userId: number): Promise<{ id: number; accounting_date: string }> {
@@ -76,10 +127,22 @@ router.get('/', authenticateToken, [
   const { start_date, end_date, customer_id, cash_register_id, user_id, payment_method, status, page = 1, limit = 50 } = req.query;
   const offset = (Number(page) - 1) * Number(limit);
   const isAdmin = req.user?.role === 'admin';
+  const params: any[] = [];
+  const paymentFilterAmountSelect = payment_method
+    ? `(
+         SELECT COALESCE(SUM(spd.amount), 0)
+         FROM sale_payment_details spd
+         WHERE spd.sale_id = s.id AND spd.payment_method = ?
+       ) as payment_filter_amount,`
+    : '';
+  if (payment_method) {
+    params.push(payment_method);
+  }
 
   let query = `
     SELECT s.*,
-           COALESCE(pm.name, s.payment_method) as payment_method_name,
+           CASE WHEN s.payment_method = 'mixed' THEN 'Mixto' ELSE COALESCE(pm.name, s.payment_method) END as payment_method_name,
+           ${paymentFilterAmountSelect}
            COALESCE(cr.accounting_date, DATE(s.created_at)) as cash_accounting_date,
            cr.opened_at as cash_opened_at,
            c.name as customer_name,
@@ -91,7 +154,6 @@ router.get('/', authenticateToken, [
     INNER JOIN users u ON s.user_id = u.id
     WHERE 1=1
   `;
-  const params: any[] = [];
 
   if (start_date) {
     query += ' AND COALESCE(cr.accounting_date, DATE(s.created_at)) >= ?';
@@ -125,8 +187,15 @@ router.get('/', authenticateToken, [
   }
 
   if (payment_method) {
-    query += ' AND s.payment_method = ?';
-    params.push(payment_method);
+    query += ` AND (
+      s.payment_method = ?
+      OR EXISTS (
+        SELECT 1
+        FROM sale_payment_details spd
+        WHERE spd.sale_id = s.id AND spd.payment_method = ?
+      )
+    )`;
+    params.push(payment_method, payment_method);
   }
 
   if (status) {
@@ -175,8 +244,15 @@ router.get('/', authenticateToken, [
       countParams.push(req.user!.id);
     }
     if (payment_method) {
-      countQuery += ' AND s.payment_method = ?';
-      countParams.push(payment_method);
+      countQuery += ` AND (
+        s.payment_method = ?
+        OR EXISTS (
+          SELECT 1
+          FROM sale_payment_details spd
+          WHERE spd.sale_id = s.id AND spd.payment_method = ?
+        )
+      )`;
+      countParams.push(payment_method, payment_method);
     }
     if (status) {
       countQuery += ' AND s.status = ?';
@@ -216,7 +292,7 @@ router.get('/available-for-return', authenticateToken, async (req: AuthRequest, 
   }
 
   let sql = `
-     SELECT DISTINCT s.*, COALESCE(pm.name, s.payment_method) as payment_method_name, c.name as customer_name, u.username as user_name,
+     SELECT DISTINCT s.*, CASE WHEN s.payment_method = 'mixed' THEN 'Mixto' ELSE COALESCE(pm.name, s.payment_method) END as payment_method_name, c.name as customer_name, u.username as user_name,
             COALESCE(cr.accounting_date, DATE(s.created_at)) as cash_accounting_date
      FROM sales s
      LEFT JOIN customers c ON s.customer_id = c.id
@@ -258,7 +334,7 @@ router.get('/:id', (req, res) => {
   const { id } = req.params;
 
   db.get(
-    `SELECT s.*, COALESCE(pm.name, s.payment_method) as payment_method_name, c.name as customer_name, c.email as customer_email,
+    `SELECT s.*, CASE WHEN s.payment_method = 'mixed' THEN 'Mixto' ELSE COALESCE(pm.name, s.payment_method) END as payment_method_name, c.name as customer_name, c.email as customer_email,
             u.username as user_name, u.full_name as user_full_name
      FROM sales s
      LEFT JOIN customers c ON s.customer_id = c.id
@@ -291,7 +367,20 @@ router.get('/:id', (req, res) => {
           if (err) {
             return res.status(500).json({ error: 'Database error' });
           }
-          res.json({ ...(sale as Record<string, unknown>), items });
+          db.all(
+            `SELECT spd.*, COALESCE(pm.name, spd.payment_method) as payment_method_name
+             FROM sale_payment_details spd
+             LEFT JOIN payment_methods pm ON pm.value = spd.payment_method
+             WHERE spd.sale_id = ?
+             ORDER BY spd.id ASC`,
+            [id],
+            (paymentErr, paymentDetails) => {
+              if (paymentErr) {
+                return res.status(500).json({ error: 'Database error' });
+              }
+              res.json({ ...(sale as Record<string, unknown>), items, payment_details: paymentDetails || [] });
+            }
+          );
         }
       );
     }
@@ -305,6 +394,11 @@ router.post('/', authenticateToken, [
   body('items.*.quantity').isInt({ min: 1 }).withMessage('Valid quantity is required'),
   body('payment_method').notEmpty().withMessage('Payment method is required'),
   body('payment_reference').optional().isString(),
+  body('payment_details').optional().isArray(),
+  body('payment_details.*.payment_method').optional().isString(),
+  body('payment_details.*.method').optional().isString(),
+  body('payment_details.*.amount').optional().isFloat({ gt: 0 }),
+  body('payment_details.*.payment_reference').optional().isString(),
 ], (req: AuthRequest, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -318,6 +412,7 @@ router.post('/', authenticateToken, [
     tax_amount = 0,
     payment_method,
     payment_reference,
+    payment_details,
     notes,
   } = req.body;
 
@@ -409,11 +504,16 @@ router.post('/', authenticateToken, [
     });
   };
 
-  validatePaymentMethod(payment_method, payment_reference)
-    .then(() => validateItems())
-    .then(() => getOpenCashRegister(req.user!.id))
-    .then((cashRegister) => {
+  validateItems()
+    .then(() => {
       const finalAmount = totalAmount - discount + tax_amount;
+      return buildPaymentDetails(finalAmount, payment_method, payment_reference, payment_details);
+    })
+    .then((salePaymentDetails) => getOpenCashRegister(req.user!.id).then((cashRegister) => ({ cashRegister, salePaymentDetails })))
+    .then(({ cashRegister, salePaymentDetails }) => {
+      const finalAmount = totalAmount - discount + tax_amount;
+      const storedPaymentMethod = salePaymentDetails.length > 1 ? 'mixed' : salePaymentDetails[0].payment_method;
+      const storedPaymentReference = salePaymentDetails.length > 1 ? null : salePaymentDetails[0].payment_reference || null;
 
       const createdAt = getLocalDateTime();
 
@@ -421,7 +521,7 @@ router.post('/', authenticateToken, [
       db.run(
         `INSERT INTO sales (sale_number, customer_id, user_id, cash_register_id, total_amount, discount, tax_amount, final_amount, payment_method, payment_reference, notes, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [saleNumber, customer_id || null, req.user!.id, cashRegister.id, totalAmount, discount, tax_amount, finalAmount, payment_method, payment_reference?.trim() || null, notes || null, createdAt],
+        [saleNumber, customer_id || null, req.user!.id, cashRegister.id, totalAmount, discount, tax_amount, finalAmount, storedPaymentMethod, storedPaymentReference, notes || null, createdAt],
         function(err) {
           if (err) {
             return res.status(500).json({ error: 'Database error' });
@@ -429,48 +529,77 @@ router.post('/', authenticateToken, [
 
           const saleId = this.lastID;
 
-          // Insert sale items and update inventory
-          let itemsProcessed = 0;
-          const errors: string[] = [];
-
-          saleItems.forEach((item) => {
-            db.run(
-              `INSERT INTO sale_items (sale_id, product_id, quantity, presentation_id, presentation_name, conversion_factor, stock_quantity, unit_price, cost_price, discount, subtotal, sales_bonus_per_unit, sales_bonus_total)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [saleId, item.product_id, item.quantity, item.presentation_id, item.presentation_name, item.conversion_factor, item.stock_quantity, item.unit_price, item.cost_price, item.discount, item.subtotal, item.sales_bonus_per_unit, item.sales_bonus_total],
-              (err) => {
-                if (err) {
-                  errors.push(`Error inserting item for product ${item.product_id}`);
-                }
-
-                // Update inventory
-                db.run(
-                  'UPDATE inventory SET quantity = quantity - ?, last_updated = ? WHERE product_id = ?',
-                  [item.stock_quantity, createdAt, item.product_id],
-                  () => {}
-                );
-
-                // Record inventory movement
-                db.run(
-                  `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, created_at)
-                   VALUES (?, 'exit', ?, ?, ?, ?)`,
-                  [item.product_id, item.stock_quantity, saleNumber, req.user!.id, createdAt],
-                  () => {}
-                );
-
-                itemsProcessed++;
-                if (itemsProcessed === saleItems.length) {
-                  if (errors.length > 0) {
-                    return res.status(500).json({ error: errors.join(', ') });
-                  }
-                  res.status(201).json({
-                    id: saleId,
-                    sale_number: saleNumber,
-                    message: 'Sale created successfully',
-                  });
-                }
-              }
+          const insertSalePayments = (done: (paymentErr?: Error) => void) => {
+            const stmt = db.prepare(
+              `INSERT INTO sale_payment_details (sale_id, payment_method, amount, payment_reference, created_at)
+               VALUES (?, ?, ?, ?, ?)`
             );
+            let hasError = false;
+            salePaymentDetails.forEach((detail) => {
+              stmt.run(
+                [saleId, detail.payment_method, detail.amount, detail.payment_reference || null, createdAt],
+                (paymentErr) => {
+                  if (paymentErr) hasError = true;
+                }
+              );
+            });
+            stmt.finalize((finalizeErr) => {
+              if (finalizeErr || hasError) {
+                done(new Error('Error registrando los pagos de la venta'));
+                return;
+              }
+              done();
+            });
+          };
+
+          // Insert sale items and update inventory
+          insertSalePayments((paymentErr) => {
+            if (paymentErr) {
+              return res.status(500).json({ error: paymentErr.message });
+            }
+
+            let itemsProcessed = 0;
+            const errors: string[] = [];
+
+            saleItems.forEach((item) => {
+              db.run(
+                `INSERT INTO sale_items (sale_id, product_id, quantity, presentation_id, presentation_name, conversion_factor, stock_quantity, unit_price, cost_price, discount, subtotal, sales_bonus_per_unit, sales_bonus_total)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [saleId, item.product_id, item.quantity, item.presentation_id, item.presentation_name, item.conversion_factor, item.stock_quantity, item.unit_price, item.cost_price, item.discount, item.subtotal, item.sales_bonus_per_unit, item.sales_bonus_total],
+                (err) => {
+                  if (err) {
+                    errors.push(`Error inserting item for product ${item.product_id}`);
+                  }
+
+                  // Update inventory
+                  db.run(
+                    'UPDATE inventory SET quantity = quantity - ?, last_updated = ? WHERE product_id = ?',
+                    [item.stock_quantity, createdAt, item.product_id],
+                    () => {}
+                  );
+
+                  // Record inventory movement
+                  db.run(
+                    `INSERT INTO inventory_movements (product_id, movement_type, quantity, reference_number, user_id, created_at)
+                     VALUES (?, 'exit', ?, ?, ?, ?)`,
+                    [item.product_id, item.stock_quantity, saleNumber, req.user!.id, createdAt],
+                    () => {}
+                  );
+
+                  itemsProcessed++;
+                  if (itemsProcessed === saleItems.length) {
+                    if (errors.length > 0) {
+                      return res.status(500).json({ error: errors.join(', ') });
+                    }
+                    res.status(201).json({
+                      id: saleId,
+                      sale_number: saleNumber,
+                      message: 'Sale created successfully',
+                    });
+                  }
+                }
+              );
+            });
           });
         }
       );

@@ -119,17 +119,18 @@ router.get('/', authenticateToken, [
     INNER JOIN users u ON cr.user_id = u.id
     LEFT JOIN (
       SELECT 
-        cash_register_id,
-        COUNT(*) as total_sales,
-        COALESCE(SUM(s.final_amount), 0) as total_amount,
-        COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN s.payment_method = 'cash' THEN 1 ELSE 0 END) = 1 THEN s.final_amount ELSE 0 END), 0) as cash_amount,
-        COALESCE(SUM(CASE WHEN LOWER(COALESCE(pm.value, s.payment_method, '')) LIKE '%yape%' OR LOWER(COALESCE(pm.name, '')) LIKE '%yape%' THEN s.final_amount ELSE 0 END), 0) as yape_amount,
-        COALESCE(SUM(CASE WHEN LOWER(COALESCE(pm.value, s.payment_method, '')) LIKE '%visa%' OR LOWER(COALESCE(pm.name, '')) LIKE '%visa%' OR LOWER(COALESCE(pm.value, s.payment_method, '')) = 'card' OR LOWER(COALESCE(pm.name, '')) LIKE '%tarjeta%' THEN s.final_amount ELSE 0 END), 0) as visa_amount,
-        COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN s.payment_method = 'cash' THEN 1 ELSE 0 END) = 0 THEN s.final_amount ELSE 0 END), 0) as digital_amount
+        s.cash_register_id,
+        COUNT(DISTINCT s.id) as total_sales,
+        COALESCE(SUM(COALESCE(spd.amount, s.final_amount)), 0) as total_amount,
+        COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN COALESCE(spd.payment_method, s.payment_method) = 'cash' THEN 1 ELSE 0 END) = 1 THEN COALESCE(spd.amount, s.final_amount) ELSE 0 END), 0) as cash_amount,
+        COALESCE(SUM(CASE WHEN LOWER(COALESCE(pm.value, spd.payment_method, s.payment_method, '')) LIKE '%yape%' OR LOWER(COALESCE(pm.name, '')) LIKE '%yape%' THEN COALESCE(spd.amount, s.final_amount) ELSE 0 END), 0) as yape_amount,
+        COALESCE(SUM(CASE WHEN LOWER(COALESCE(pm.value, spd.payment_method, s.payment_method, '')) LIKE '%visa%' OR LOWER(COALESCE(pm.name, '')) LIKE '%visa%' OR LOWER(COALESCE(pm.value, spd.payment_method, s.payment_method, '')) = 'card' OR LOWER(COALESCE(pm.name, '')) LIKE '%tarjeta%' THEN COALESCE(spd.amount, s.final_amount) ELSE 0 END), 0) as visa_amount,
+        COALESCE(SUM(CASE WHEN COALESCE(pm.is_cash, CASE WHEN COALESCE(spd.payment_method, s.payment_method) = 'cash' THEN 1 ELSE 0 END) = 0 THEN COALESCE(spd.amount, s.final_amount) ELSE 0 END), 0) as digital_amount
       FROM sales s
-      LEFT JOIN payment_methods pm ON pm.value = s.payment_method
+      LEFT JOIN sale_payment_details spd ON spd.sale_id = s.id
+      LEFT JOIN payment_methods pm ON pm.value = COALESCE(spd.payment_method, s.payment_method)
       WHERE (s.status != 'cancelled' OR s.status IS NULL)
-      GROUP BY cash_register_id
+      GROUP BY s.cash_register_id
     ) agg ON cr.id = agg.cash_register_id
     LEFT JOIN (
       SELECT
@@ -296,13 +297,16 @@ router.post('/close', authenticateToken, [
 
       // Aggregate sales for this cash register
       db.all(
-        `SELECT COALESCE(pm.name, s.payment_method) as payment_method, COUNT(*) as count, COALESCE(SUM(s.final_amount), 0) as total
+        `SELECT COALESCE(pm.name, spd.payment_method, s.payment_method) as payment_method,
+                COUNT(DISTINCT s.id) as count,
+                COALESCE(SUM(COALESCE(spd.amount, s.final_amount)), 0) as total
          FROM sales s
-         LEFT JOIN payment_methods pm ON pm.value = s.payment_method
+         LEFT JOIN sale_payment_details spd ON spd.sale_id = s.id
+         LEFT JOIN payment_methods pm ON pm.value = COALESCE(spd.payment_method, s.payment_method)
          WHERE s.user_id = ? 
            AND s.cash_register_id = ?
            AND (s.status != 'cancelled' OR s.status IS NULL)
-         GROUP BY s.payment_method, pm.name`,
+         GROUP BY COALESCE(spd.payment_method, s.payment_method), pm.name`,
         [userId, session.id],
         (aggErr, rows: any[]) => {
           if (aggErr) {

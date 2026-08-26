@@ -72,6 +72,23 @@ function validatePaymentMethod(value: string): Promise<boolean> {
   });
 }
 
+function getFirstSalePaymentMethod(saleId: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    db.get(
+      `SELECT payment_method
+       FROM sale_payment_details
+       WHERE sale_id = ?
+       ORDER BY id ASC
+       LIMIT 1`,
+      [saleId],
+      (err, row: any) => {
+        if (err || !row?.payment_method) return resolve(null);
+        resolve(String(row.payment_method));
+      }
+    );
+  });
+}
+
 // Get all returns
 router.get('/', authenticateToken, [
   query('start_date').optional(),
@@ -262,9 +279,12 @@ router.post('/', authenticateToken, [
               return res.status(403).json({ error: 'ContraseÃ±a incorrecta.' });
             }
 
-            const effectiveRefundPaymentMethod = String(refund_payment_method || sale.payment_method || 'cash').trim();
+            const firstSalePaymentMethod = sale.payment_method === 'mixed'
+              ? await getFirstSalePaymentMethod(sale.id)
+              : null;
+            const effectiveRefundPaymentMethod = String(refund_payment_method || firstSalePaymentMethod || sale.payment_method || 'cash').trim();
             const validPaymentMethod = await validatePaymentMethod(effectiveRefundPaymentMethod);
-            if (!validPaymentMethod && effectiveRefundPaymentMethod !== sale.payment_method) {
+            if (!validPaymentMethod) {
               return res.status(400).json({ error: 'El metodo de devolucion no existe o esta inactivo.' });
             }
 

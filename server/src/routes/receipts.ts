@@ -69,7 +69,7 @@ function getSettings(): Promise<any> {
 function getSale(saleId: string): Promise<any> {
   return new Promise((resolve, reject) => {
     db.get(
-      `SELECT s.*, COALESCE(pm.name, s.payment_method) as payment_method_name, c.name as customer_name, c.email as customer_email, c.phone as customer_phone,
+      `SELECT s.*, CASE WHEN s.payment_method = 'mixed' THEN 'Mixto' ELSE COALESCE(pm.name, s.payment_method) END as payment_method_name, c.name as customer_name, c.email as customer_email, c.phone as customer_phone,
               u.username as user_name, u.full_name as user_full_name
        FROM sales s
        LEFT JOIN customers c ON s.customer_id = c.id
@@ -96,6 +96,23 @@ function getItems(saleId: string): Promise<any[]> {
       (err, items) => {
         if (err) return reject(err);
         resolve(items || []);
+      }
+    );
+  });
+}
+
+function getPayments(saleId: string): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT spd.*, COALESCE(pm.name, spd.payment_method) as payment_method_name
+       FROM sale_payment_details spd
+       LEFT JOIN payment_methods pm ON pm.value = spd.payment_method
+       WHERE spd.sale_id = ?
+       ORDER BY spd.id ASC`,
+      [saleId],
+      (err, payments) => {
+        if (err) return reject(err);
+        resolve(payments || []);
       }
     );
   });
@@ -369,10 +386,11 @@ router.get('/inventory-loads/:reference/pdf', authenticateToken, async (req: Aut
 router.get('/:saleId/pdf', authenticateToken, async (req: AuthRequest, res) => {
   try {
     const { saleId } = req.params;
-    const [settings, sale, items] = await Promise.all([
+    const [settings, sale, items, payments] = await Promise.all([
       getSettings(),
       getSale(saleId),
       getItems(saleId),
+      getPayments(saleId),
     ]);
 
     if (!sale) {
@@ -403,7 +421,7 @@ router.get('/:saleId/pdf', authenticateToken, async (req: AuthRequest, res) => {
       return sum + nameLines + (item.discount > 0 ? 1 : 0);
     }, 0);
     const totalsLineCount = 2 + (sale.discount > 0 ? 1 : 0) + (sale.tax_amount > 0 ? 1 : 0);
-    const paymentLineCount = 1 + (sale.payment_reference ? 1 : 0);
+    const paymentLineCount = Math.max(1, payments.length) + (sale.payment_reference ? 1 : 0);
     const footerLineCount = 1 + (settings.website ? 1 : 0);
     const estimatedHeight =
       topMargin +
@@ -516,8 +534,18 @@ router.get('/:saleId/pdf', authenticateToken, async (req: AuthRequest, res) => {
     totalRow('TOTAL:', money(sale.final_amount), true);
     line(doc, margin, contentRight);
 
-    doc.font('Helvetica-Bold').fontSize(7).text(`Metodo de pago: ${(sale.payment_method_name || sale.payment_method).toUpperCase()}`, margin, doc.y, { width: contentRight - margin, align: 'center' });
-    if (sale.payment_reference) {
+    if (payments.length > 1) {
+      doc.font('Helvetica-Bold').fontSize(7).text('Metodo de pago: MIXTO', margin, doc.y, { width: contentRight - margin, align: 'center' });
+      payments.forEach((payment) => {
+        const label = payment.payment_method_name || payment.payment_method;
+        const reference = payment.payment_reference ? ` (${payment.payment_reference})` : '';
+        doc.font('Helvetica').fontSize(7).text(`${label}: ${money(payment.amount)}${reference}`, margin, doc.y, { width: contentRight - margin, align: 'center' });
+      });
+    } else {
+      const payment = payments[0];
+      doc.font('Helvetica-Bold').fontSize(7).text(`Metodo de pago: ${((payment?.payment_method_name || sale.payment_method_name || sale.payment_method) as string).toUpperCase()}`, margin, doc.y, { width: contentRight - margin, align: 'center' });
+    }
+    if (sale.payment_reference && payments.length <= 1) {
       doc.text(`Referencia: ${sale.payment_reference}`, margin, doc.y, { width: contentRight - margin, align: 'center' });
     }
 
@@ -527,7 +555,12 @@ router.get('/:saleId/pdf', authenticateToken, async (req: AuthRequest, res) => {
         venta: sale.sale_number,
         fecha: sale.created_at,
         total: sale.final_amount,
-        metodo: sale.payment_method_name || sale.payment_method,
+        metodo: payments.length > 1 ? 'Mixto' : (payments[0]?.payment_method_name || sale.payment_method_name || sale.payment_method),
+        pagos: payments.map((payment) => ({
+          metodo: payment.payment_method_name || payment.payment_method,
+          monto: payment.amount,
+          referencia: payment.payment_reference || '',
+        })),
         referencia: sale.payment_reference || '',
       });
       const qrDataUrl = await QRCode.toDataURL(qrPayload, { margin: 1, width: 140 });

@@ -147,8 +147,13 @@ export default function CashMovements() {
   );
 
   const salesTotal = useMemo(
-    () => sales.reduce((sum, sale) => sum + Number(sale.final_amount || 0), 0),
-    [sales]
+    () => sales.reduce((sum, sale) => {
+      const amount = effectiveFilters.payment_method
+        ? Number(sale.payment_filter_amount || 0)
+        : Number(sale.final_amount || 0);
+      return sum + amount;
+    }, 0),
+    [sales, effectiveFilters.payment_method]
   );
 
   const extraMovementsTotal = useMemo(
@@ -356,7 +361,7 @@ export default function CashMovements() {
                 <tr key={sale.id}>
                   <td>{sale.sale_number}</td>
                   <td>{sale.customer_name || 'Cliente General'}</td>
-                  <td>{formatCurrency(Number(sale.final_amount || 0))}</td>
+                  <td>{formatCurrency(effectiveFilters.payment_method ? Number(sale.payment_filter_amount || 0) : Number(sale.final_amount || 0))}</td>
                   <td>
                     {sale.payment_method_name || sale.payment_method}
                     {sale.payment_reference ? ` (${sale.payment_reference})` : ''}

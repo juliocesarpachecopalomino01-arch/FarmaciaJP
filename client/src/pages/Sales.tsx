@@ -7,7 +7,7 @@ import { customersApi } from '../api/customers';
 import { cashRegistersApi, CashRegister } from '../api/cashRegisters';
 import { paymentMethodsApi } from '../api/paymentMethods';
 import { printReceipt } from '../utils/printReceipt';
-import { X, ShoppingCart } from 'lucide-react';
+import { Plus, X, ShoppingCart } from 'lucide-react';
 import './Sales.css';
 
 type SaleCartItem = {
@@ -37,6 +37,13 @@ type SaleProductOption = {
   label: string;
 };
 
+type PaymentSplitRow = {
+  id: string;
+  payment_method: string;
+  amount: string;
+  payment_reference: string;
+};
+
 export default function Sales() {
   const [productSearch, setProductSearch] = useState('');
   const [isProductSearchOpen, setIsProductSearchOpen] = useState(false);
@@ -51,6 +58,8 @@ export default function Sales() {
     amount_paid: '',
     payment_reference: '',
   });
+  const [isMixedPayment, setIsMixedPayment] = useState(false);
+  const [paymentSplits, setPaymentSplits] = useState<PaymentSplitRow[]>([]);
 
   const queryClient = useQueryClient();
 
@@ -70,10 +79,11 @@ export default function Sales() {
 
   useEffect(() => {
     if (paymentMethods.length === 0) return;
+    if (isMixedPayment) return;
     if (!paymentMethods.some((method) => method.value === saleForm.payment_method)) {
       setSaleForm((current) => ({ ...current, payment_method: paymentMethods[0].value }));
     }
-  }, [paymentMethods, saleForm.payment_method]);
+  }, [paymentMethods, saleForm.payment_method, isMixedPayment]);
 
   const createSaleMutation = useMutation(salesApi.create, {
     onSuccess: (data) => {
@@ -108,6 +118,8 @@ export default function Sales() {
       amount_paid: '',
       payment_reference: '',
     });
+    setIsMixedPayment(false);
+    setPaymentSplits([]);
   };
 
   const getCartKey = (item: { product_id: number; presentation_id?: number; presentation_name?: string }) =>
@@ -189,11 +201,69 @@ export default function Sales() {
   };
 
   const calculateChange = () => {
-    if (!selectedPaymentMethod?.is_cash) return 0;
+    if (isMixedPayment || !selectedPaymentMethod?.is_cash) return 0;
     const total = calculateTotal();
     const paid = Number(saleForm.amount_paid) || 0;
     const change = paid - total;
     return Number.isNaN(change) ? 0 : change;
+  };
+
+  const getRemainingPaymentAmount = () => {
+    const paid = paymentSplits.reduce((sum, split) => sum + (Number(split.amount) || 0), 0);
+    return Math.round((calculateTotal() - paid) * 100) / 100;
+  };
+
+  const startMixedPayment = () => {
+    const total = calculateTotal();
+    setIsMixedPayment(true);
+    setPaymentSplits([
+      {
+        id: `${Date.now()}-0`,
+        payment_method: saleForm.payment_method || paymentMethods[0]?.value || 'cash',
+        amount: total > 0 ? total.toFixed(2) : '',
+        payment_reference: '',
+      },
+    ]);
+    setSaleForm((current) => ({ ...current, payment_method: 'mixed', payment_reference: '', amount_paid: '' }));
+  };
+
+  const stopMixedPayment = (paymentMethod: string) => {
+    setIsMixedPayment(false);
+    setPaymentSplits([]);
+    setSaleForm((current) => ({
+      ...current,
+      payment_method: paymentMethod,
+      payment_reference: '',
+      amount_paid: '',
+    }));
+  };
+
+  const addPaymentSplit = () => {
+    const remaining = getRemainingPaymentAmount();
+    setPaymentSplits((current) => [
+      ...current,
+      {
+        id: `${Date.now()}-${current.length}`,
+        payment_method: paymentMethods[0]?.value || 'cash',
+        amount: remaining > 0 ? remaining.toFixed(2) : '',
+        payment_reference: '',
+      },
+    ]);
+  };
+
+  const updatePaymentSplit = (id: string, field: keyof Omit<PaymentSplitRow, 'id'>, value: string) => {
+    setPaymentSplits((current) => current.map((split) => (
+      split.id === id ? { ...split, [field]: value } : split
+    )));
+  };
+
+  const removePaymentSplit = (id: string) => {
+    setPaymentSplits((current) => current.filter((split) => split.id !== id));
+  };
+
+  const isPaymentSplitReferenceValid = (split: PaymentSplitRow) => {
+    const method = paymentMethods.find((item) => item.value === split.payment_method);
+    return method?.reference_required !== 1 || Boolean(split.payment_reference.trim());
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -209,7 +279,25 @@ export default function Sales() {
     }
 
     const total = calculateTotal();
-    if (selectedPaymentMethod?.is_cash) {
+    if (isMixedPayment) {
+      const totalPaid = paymentSplits.reduce((sum, split) => sum + (Number(split.amount) || 0), 0);
+      if (paymentSplits.length < 2) {
+        alert('Agrega al menos dos metodos para usar pago mixto.');
+        return;
+      }
+      if (paymentSplits.some((split) => !split.payment_method || (Number(split.amount) || 0) <= 0)) {
+        alert('Cada metodo de pago debe tener un monto mayor a cero.');
+        return;
+      }
+      if (Math.round(totalPaid * 100) !== Math.round(total * 100)) {
+        alert('La suma de los pagos debe ser igual al total de la venta.');
+        return;
+      }
+      if (!paymentSplits.every(isPaymentSplitReferenceValid)) {
+        alert('Completa las referencias obligatorias de los metodos de pago.');
+        return;
+      }
+    } else if (selectedPaymentMethod?.is_cash) {
       const paid = Number(saleForm.amount_paid) || 0;
       if (paid < total) {
         alert('El monto pagado es menor al total de la venta.');
@@ -217,7 +305,7 @@ export default function Sales() {
       }
     }
 
-    if (selectedPaymentMethod?.reference_required === 1 && !saleForm.payment_reference.trim()) {
+    if (!isMixedPayment && selectedPaymentMethod?.reference_required === 1 && !saleForm.payment_reference.trim()) {
       alert(`${selectedPaymentMethod.reference_label || 'Código / Referencia'} es obligatorio para este método de pago.`);
       return;
     }
@@ -235,8 +323,15 @@ export default function Sales() {
       })),
       discount: Number(saleForm.discount) || 0,
       tax_amount: Number(saleForm.tax_amount) || 0,
-      payment_method: saleForm.payment_method,
-      payment_reference: saleForm.payment_reference.trim() || undefined,
+      payment_method: isMixedPayment ? 'mixed' : saleForm.payment_method,
+      payment_reference: isMixedPayment ? undefined : saleForm.payment_reference.trim() || undefined,
+      payment_details: isMixedPayment
+        ? paymentSplits.map((split) => ({
+            payment_method: split.payment_method,
+            amount: Number(split.amount) || 0,
+            payment_reference: split.payment_reference.trim() || undefined,
+          }))
+        : undefined,
       notes: saleForm.notes || undefined,
     };
 
@@ -247,9 +342,16 @@ export default function Sales() {
   const totalAmount = calculateTotal();
   const selectedPaymentMethod = paymentMethods.find((method) => method.value === saleForm.payment_method);
   const isCash = selectedPaymentMethod?.is_cash === 1;
-  const asksReference = selectedPaymentMethod?.requires_reference === 1;
+  const asksReference = !isMixedPayment && selectedPaymentMethod?.requires_reference === 1;
   const changeAmount = calculateChange();
-  const isPaymentValid = !isCash || totalAmount <= 0 || (Number(saleForm.amount_paid) || 0) >= totalAmount;
+  const remainingPaymentAmount = getRemainingPaymentAmount();
+  const isMixedPaymentValid =
+    paymentSplits.length >= 2
+    && paymentSplits.every((split) => split.payment_method && (Number(split.amount) || 0) > 0 && isPaymentSplitReferenceValid(split))
+    && Math.round(paymentSplits.reduce((sum, split) => sum + (Number(split.amount) || 0), 0) * 100) === Math.round(totalAmount * 100);
+  const isPaymentValid = isMixedPayment
+    ? isMixedPaymentValid
+    : (!isCash || totalAmount <= 0 || (Number(saleForm.amount_paid) || 0) >= totalAmount);
   const availableProducts = (productsData?.products || []).filter((p) => (p.stock || 0) > 0 && (p.is_active === undefined || p.is_active === 1));
   const getProductDisplayName = (product: { name: string; laboratory?: string }) => {
     const laboratory = product.laboratory?.trim();
@@ -488,8 +590,14 @@ export default function Sales() {
             <div className="form-group">
               <label>Método de Pago *</label>
               <select
-                value={saleForm.payment_method}
-                onChange={(e) => setSaleForm({ ...saleForm, payment_method: e.target.value, payment_reference: '' })}
+                value={isMixedPayment ? 'mixed' : saleForm.payment_method}
+                onChange={(e) => {
+                  if (e.target.value === 'mixed') {
+                    startMixedPayment();
+                    return;
+                  }
+                  stopMixedPayment(e.target.value);
+                }}
                 required
               >
                 <option value="" disabled>Seleccionar método...</option>
@@ -498,8 +606,75 @@ export default function Sales() {
                     {method.name}
                   </option>
                 ))}
+                <option value="mixed">Pago mixto</option>
               </select>
             </div>
+
+            {isMixedPayment && (
+              <div className="payment-split-panel">
+                <div className="payment-split-header">
+                  <strong>Pagos de esta venta</strong>
+                  <button type="button" className="btn-secondary btn-small" onClick={addPaymentSplit}>
+                    <Plus size={14} />
+                    Agregar
+                  </button>
+                </div>
+                <div className="payment-split-list">
+                  {paymentSplits.map((split) => {
+                    const splitMethod = paymentMethods.find((method) => method.value === split.payment_method);
+                    return (
+                      <div className={`payment-split-row ${splitMethod?.requires_reference === 1 ? 'with-reference' : 'without-reference'}`} key={split.id}>
+                        <select
+                          value={split.payment_method}
+                          onChange={(e) => updatePaymentSplit(split.id, 'payment_method', e.target.value)}
+                        >
+                          {paymentMethods.map((method) => (
+                            <option key={method.id} value={method.value}>
+                              {method.name}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={split.amount}
+                          onChange={(e) => updatePaymentSplit(split.id, 'amount', e.target.value)}
+                          placeholder="Monto"
+                        />
+                        {splitMethod?.requires_reference === 1 && (
+                          <input
+                            type="text"
+                            value={split.payment_reference}
+                            onChange={(e) => updatePaymentSplit(split.id, 'payment_reference', e.target.value)}
+                            placeholder={splitMethod.reference_label || 'Referencia'}
+                          />
+                        )}
+                        <button
+                          type="button"
+                          className="btn-icon btn-danger"
+                          onClick={() => removePaymentSplit(split.id)}
+                          disabled={paymentSplits.length <= 1}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className={`payment-split-balance ${remainingPaymentAmount === 0 ? 'ok' : 'pending'}`}>
+                  <span>Total pagos</span>
+                  <strong>
+                    S/ {paymentSplits.reduce((sum, split) => sum + (Number(split.amount) || 0), 0).toFixed(2)}
+                  </strong>
+                  <span>
+                    {remainingPaymentAmount === 0
+                      ? 'Cuadrado'
+                      : `${remainingPaymentAmount > 0 ? 'Falta' : 'Sobra'} S/ ${Math.abs(remainingPaymentAmount).toFixed(2)}`}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {asksReference && (
               <div className="form-group">
@@ -538,7 +713,7 @@ export default function Sales() {
               />
             </div>
 
-            {isCash && (
+            {!isMixedPayment && isCash && (
               <>
                 <div className="form-group">
                   <label>Monto Pagado</label>
@@ -603,7 +778,7 @@ export default function Sales() {
               >
                 Cancelar
               </button>
-              <button type="submit" className="btn-primary" disabled={cart.length === 0 || !selectedPaymentMethod || !isPaymentValid || createSaleMutation.isLoading}>
+              <button type="submit" className="btn-primary" disabled={cart.length === 0 || (!isMixedPayment && !selectedPaymentMethod) || !isPaymentValid || createSaleMutation.isLoading}>
                 <ShoppingCart size={20} />
                 {createSaleMutation.isLoading ? 'Procesando...' : 'Procesar Venta'}
               </button>

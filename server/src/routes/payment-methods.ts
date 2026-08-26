@@ -191,7 +191,12 @@ router.delete('/:id', authenticateToken, (req: AuthRequest, res) => {
       return res.status(404).json({ error: 'Payment method not found' });
     }
 
-    db.get('SELECT COUNT(*) as count FROM sales WHERE payment_method = ?', [method.value], (countErr, result: any) => {
+    db.get(
+      `SELECT
+         (SELECT COUNT(*) FROM sales WHERE payment_method = ?) +
+         (SELECT COUNT(*) FROM sale_payment_details WHERE payment_method = ?) as count`,
+      [method.value, method.value],
+      (countErr, result: any) => {
       if (countErr) {
         return res.status(500).json({ error: 'Database error' });
       }

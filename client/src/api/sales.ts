@@ -22,6 +22,7 @@ export interface Sale {
   discount: number;
   tax_amount: number;
   final_amount: number;
+  payment_filter_amount?: number;
   payment_method: string;
   payment_method_name?: string;
   payment_reference?: string;
@@ -31,6 +32,7 @@ export interface Sale {
   notes?: string;
   created_at: string;
   items?: SaleItemDetail[];
+  payment_details?: SalePaymentDetail[];
 }
 
 export interface SaleItemDetail {
@@ -51,8 +53,20 @@ export interface SaleItemDetail {
 }
 
 export interface PaymentMethodDetail {
-  method: string;
+  method?: string;
+  payment_method?: string;
   amount: number;
+  payment_reference?: string;
+}
+
+export interface SalePaymentDetail {
+  id: number;
+  sale_id: number;
+  payment_method: string;
+  payment_method_name?: string;
+  amount: number;
+  payment_reference?: string;
+  created_at?: string;
 }
 
 export interface CreateSaleRequest {
